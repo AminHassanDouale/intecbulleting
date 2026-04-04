@@ -1,0 +1,48 @@
+@import 'tailwindcss';
+
+@source '../../vendor/laravel/framework/src/Illuminate/Pagination/resources/views/*.blade.php';
+@source '../../storage/framework/views/*.php';
+@source '../**/*.blade.php';
+@source '../**/*.js';
+
+/* MaryUI + DaisyUI vendor sources */
+@source '../../vendor/robsontenorio/mary/src/View/Components/**/*.php';
+
+@plugin "daisyui" {
+    themes: ["light", "dark"];
+}
+
+@theme {
+    --font-sans: 'Instrument Sans', ui-sans-serif, system-ui, sans-serif;
+}
+
+/* ── Override DaisyUI light theme with vivid, visible colors ──────────────── */
+[data-theme="light"] {
+    /* Primary: indigo-600 — vivid blue-indigo */
+    --color-primary:         oklch(51.01% 0.2742 264.05);
+    --color-primary-content: oklch(100%   0      0);
+
+    /* Secondary: violet-600 */
+    --color-secondary:         oklch(53.18% 0.2804 296.70);
+    --color-secondary-content: oklch(100%   0      0);
+
+    /* Accent: sky-500 */
+    --color-accent:         oklch(68.50% 0.1693 237.32);
+    --color-accent-content: oklch(100%   0      0);
+
+    /* Error: red-600 */
+    --color-error:         oklch(53.02% 0.2323 27.32);
+    --color-error-content: oklch(100%   0      0);
+
+    /* Success: emerald-600 */
+    --color-success:         oklch(54.58% 0.2030 149.58);
+    --color-success-content: oklch(100%   0      0);
+
+    /* Warning: amber-500 */
+    --color-warning:         oklch(74.51% 0.1673 66.29);
+    --color-warning-content: oklch(20%    0      0);
+
+    /* Info: blue-600 */
+    --color-info:         oklch(54.60% 0.2145 264.05);
+    --color-info-content: oklch(100%   0      0);
+}
