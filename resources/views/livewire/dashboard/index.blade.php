@@ -11,7 +11,8 @@ use Livewire\Volt\Component;
 
 new #[Layout('components.layouts.app')] class extends Component {
 
-    public string $filterPeriod = '';
+    public ?string $filterPeriod = null;
+    public bool    $showFilters  = false;
 
     public function mount(): void
     {
@@ -187,13 +188,11 @@ new #[Layout('components.layouts.app')] class extends Component {
                         @default Tableau de bord @endswitch
                 </p>
             </div>
-            <div class="self-start sm:self-auto">
-                <x-select
-                    wire:model.live="filterPeriod"
-                    :options="App\Enums\PeriodEnum::options()"
-                    placeholder="Tous les trimestres"
-                    class="select-sm bg-white/15 border-white/30 text-white [&>option]:text-base-content"
-                />
+            <div class="self-start sm:self-auto relative">
+                <x-button icon="o-funnel" label="Filtres" @click="$wire.showFilters = true" class="btn-white/20 text-white border-white/30 hover:bg-white/30" />
+                @if($filterPeriod)
+                <span class="absolute -top-1.5 -right-1.5 badge badge-warning badge-xs font-bold">1</span>
+                @endif
             </div>
         </div>
     </div>
@@ -478,7 +477,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <div class="flex items-center gap-3 py-2.5">
                         <div class="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0
                             {{ $b->student->gender === 'M' ? 'bg-blue-100 text-blue-700' : 'bg-pink-100 text-pink-700' }}">
-                            {{ strtoupper(substr($b->student->first_name, 0, 1)) }}
+                            {{ strtoupper(substr($b->student->full_name, 0, 1)) }}
                         </div>
                         <div class="flex-1 min-w-0">
                             <p class="text-sm font-semibold truncate">{{ $b->student->full_name }}</p>
@@ -565,6 +564,15 @@ new #[Layout('components.layouts.app')] class extends Component {
         </a>
     </div>
     @endrole
+
+    {{-- Filter drawer --}}
+    <x-filter-drawer model="showFilters" title="Filtres" subtitle="Filtrer les données du tableau de bord">
+        <x-choices label="Trimestre" wire:model.live="filterPeriod" :options="App\Enums\PeriodEnum::options()" single clearable icon="o-clock" placeholder="Tous les trimestres" />
+        <x-slot:actions>
+            <x-button label="Réinitialiser" wire:click="$set('filterPeriod', null)" icon="o-arrow-path" />
+            <x-button label="Fermer" @click="$wire.showFilters = false" class="btn-primary" icon="o-check" />
+        </x-slot:actions>
+    </x-filter-drawer>
 
 </div>
 

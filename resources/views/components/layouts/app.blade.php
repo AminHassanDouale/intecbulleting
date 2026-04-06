@@ -10,243 +10,250 @@
     @livewireStyles
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <style>
+        /* ── Sidebar nav links ──────────────────────────────────────────────── */
         .nav-link {
             display: flex;
             align-items: center;
             gap: 0.625rem;
-            padding: 0.45rem 0.75rem;
-            border-radius: 0.5rem;
-            font-size: 0.875rem;
-            transition: background 0.15s, color 0.15s;
-            color: inherit;
+            padding: 0.5rem 0.875rem;
+            border-radius: 0.625rem;
+            font-size: 0.8125rem;
+            font-weight: 500;
+            transition: all 0.15s ease;
+            color: #64748b;
             text-decoration: none;
             width: 100%;
         }
-        .nav-link:hover { background: oklch(var(--b2)); }
-        .nav-link.active { font-weight: 600; }
+        .nav-link:hover {
+            background: #f1f5f9;
+            color: #1e293b;
+        }
+        .nav-link.active {
+            background: #eff6ff;
+            color: #1d4ed8;
+            font-weight: 600;
+        }
+        .nav-link .nav-icon {
+            width: 1.75rem;
+            height: 1.75rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 0.375rem;
+            font-size: 0.875rem;
+            flex-shrink: 0;
+        }
+        .nav-link.active .nav-icon {
+            background: #dbeafe;
+        }
+
+        /* ── Section labels ─────────────────────────────────────────────────── */
+        .nav-section {
+            padding: 1rem 0.875rem 0.25rem;
+            font-size: 0.6875rem;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: #94a3b8;
+        }
 
         /* ── Vibrant toast alerts ───────────────────────────────────────────── */
         [class*="toast"] .alert {
             min-width: 280px;
             max-width: 380px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.20), 0 4px 12px rgba(0,0,0,0.12);
-            border-radius: 0.75rem;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.18), 0 4px 12px rgba(0,0,0,0.10);
+            border-radius: 0.875rem;
             padding: 0.875rem 1rem;
             border: none;
             font-size: 0.875rem;
         }
-        [class*="toast"] .alert-success {
-            background: linear-gradient(135deg, #16a34a, #15803d);
-            color: #fff;
-        }
-        [class*="toast"] .alert-success svg { color: rgba(255,255,255,0.85); }
-        [class*="toast"] .alert-error {
-            background: linear-gradient(135deg, #dc2626, #b91c1c);
-            color: #fff;
-        }
-        [class*="toast"] .alert-error svg { color: rgba(255,255,255,0.85); }
-        [class*="toast"] .alert-warning {
-            background: linear-gradient(135deg, #d97706, #b45309);
-            color: #fff;
-        }
-        [class*="toast"] .alert-warning svg { color: rgba(255,255,255,0.85); }
-        [class*="toast"] .alert-info {
-            background: linear-gradient(135deg, #2563eb, #1d4ed8);
-            color: #fff;
-        }
-        [class*="toast"] .alert-info svg { color: rgba(255,255,255,0.85); }
-        [class*="toast"] .alert .font-bold { color: #fff; }
-        [class*="toast"] .alert .text-xs { color: rgba(255,255,255,0.80); }
-        [class*="toast"] progress.progress { opacity: 0.35; }
-        [class*="toast"] progress.progress::-webkit-progress-value { background: #fff; }
-        [class*="toast"] progress.progress::-moz-progress-bar { background: #fff; }
+        [class*="toast"] .alert-success  { background: linear-gradient(135deg,#16a34a,#15803d); color:#fff; }
+        [class*="toast"] .alert-error    { background: linear-gradient(135deg,#dc2626,#b91c1c); color:#fff; }
+        [class*="toast"] .alert-warning  { background: linear-gradient(135deg,#d97706,#b45309); color:#fff; }
+        [class*="toast"] .alert-info     { background: linear-gradient(135deg,#2563eb,#1d4ed8); color:#fff; }
+        [class*="toast"] .alert svg      { color: rgba(255,255,255,0.85); }
+        [class*="toast"] .alert .font-bold { color:#fff; }
+        [class*="toast"] .alert .text-xs   { color:rgba(255,255,255,0.80); }
+        [class*="toast"] progress.progress { opacity:0.35; }
+        [class*="toast"] progress.progress::-webkit-progress-value { background:#fff; }
+        [class*="toast"] progress.progress::-moz-progress-bar { background:#fff; }
     </style>
 </head>
-<body class="min-h-screen bg-base-200 font-sans antialiased">
+<body class="min-h-screen bg-slate-100 font-sans antialiased">
 
 @php $yr = \App\Models\AcademicYear::current(); @endphp
 
 <div class="drawer lg:drawer-open">
     <input id="sidebar-drawer" type="checkbox" class="drawer-toggle" />
 
-    {{-- ── Main content area ───────────────────────────────────────────── --}}
+    {{-- ── Main content ──────────────────────────────────────────────────── --}}
     <div class="drawer-content flex flex-col min-h-screen min-w-0">
 
-        {{-- Sticky navbar --}}
-        <nav class="sticky top-0 z-30 navbar bg-linear-to-r from-blue-700 via-indigo-700 to-violet-700 text-white shadow-lg px-3 min-h-14 h-14">
+        {{-- ── Top navbar ────────────────────────────────────────────────── --}}
+        <header class="sticky top-0 z-30 h-14 bg-white border-b border-slate-200 shadow-sm flex items-center gap-3 px-4">
 
             {{-- Mobile hamburger --}}
-            <div class="flex-none lg:hidden">
-                <label for="sidebar-drawer" class="btn btn-ghost btn-square btn-sm text-white hover:bg-white/15">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="h-5 w-5 stroke-current">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h7"/>
-                    </svg>
-                </label>
-            </div>
+            <label for="sidebar-drawer" class="btn btn-ghost btn-square btn-sm lg:hidden text-slate-500 hover:bg-slate-100">
+                <svg fill="none" viewBox="0 0 24 24" class="h-5 w-5 stroke-current stroke-2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h7"/>
+                </svg>
+            </label>
 
-            {{-- Brand --}}
-            <div class="flex-1 flex items-center gap-2 min-w-0">
-                <a href="{{ route('dashboard') }}" wire:navigate
-                   class="flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-white/10 transition-colors shrink-0">
-                    <div class="w-7 h-7 bg-white/20 rounded-lg flex items-center justify-center backdrop-blur overflow-hidden p-0.5">
-                        <img src="{{ asset('images/in tech.jpg') }}" alt="INTEC" class="w-full h-full object-contain">
-                    </div>
-                    <span class="hidden sm:block text-sm font-bold">INTEC École</span>
-                </a>
+            {{-- Page breadcrumb / title area --}}
+            <div class="flex-1 flex items-center gap-3 min-w-0">
                 @if($yr)
-                <span class="hidden md:flex items-center gap-1 px-2 py-0.5 bg-white/15 rounded-full text-xs font-medium">
-                    📅 {{ $yr->label }}
+                <span class="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 bg-blue-50 text-blue-700 rounded-full text-xs font-semibold border border-blue-100">
+                    <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                    </svg>
+                    {{ $yr->label }}
                 </span>
                 @endif
             </div>
 
-            {{-- Right: notifications + user --}}
-            <div class="flex-none flex items-center gap-1">
+            {{-- Right actions --}}
+            <div class="flex items-center gap-1.5">
 
-                {{-- Notifications dropdown --}}
+                {{-- Notifications --}}
                 @php $notifCount = auth()->user()?->unreadNotifications->count() ?? 0; @endphp
                 <div class="dropdown dropdown-end">
-                    <button tabindex="0" class="btn btn-ghost btn-circle btn-sm text-white hover:bg-white/15 relative">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
+                    <button tabindex="0" class="btn btn-ghost btn-square btn-sm text-slate-500 hover:bg-slate-100 relative">
+                        <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
                         </svg>
                         @if($notifCount)
-                        <span class="absolute -top-0.5 -right-0.5 w-4 h-4 bg-amber-400 text-black text-xs font-bold rounded-full flex items-center justify-center leading-none">{{ $notifCount }}</span>
+                        <span class="absolute -top-0.5 -right-0.5 w-4 h-4 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center">{{ $notifCount }}</span>
                         @endif
                     </button>
-                    <div tabindex="0" class="dropdown-content z-50 mt-2 w-72 shadow-2xl bg-base-100 text-base-content rounded-2xl overflow-hidden border border-base-200">
-                        <div class="px-4 py-3 bg-linear-to-r from-indigo-50 to-violet-50 border-b border-base-200">
-                            <p class="font-bold text-sm text-indigo-700">🔔 Notifications</p>
+                    <div tabindex="0" class="dropdown-content z-50 mt-2 w-72 shadow-xl bg-white rounded-xl overflow-hidden border border-slate-200">
+                        <div class="px-4 py-2.5 border-b border-slate-100 flex items-center justify-between">
+                            <p class="font-semibold text-sm text-slate-700">Notifications</p>
+                            @if($notifCount)
+                            <span class="badge badge-sm badge-error">{{ $notifCount }}</span>
+                            @endif
                         </div>
-                        <div class="max-h-60 overflow-y-auto divide-y divide-base-200">
+                        <div class="max-h-64 overflow-y-auto divide-y divide-slate-100">
                             @forelse(auth()->user()?->unreadNotifications->take(6) ?? [] as $notif)
-                            <div class="px-4 py-2.5 text-xs hover:bg-base-50">
-                                <p class="text-base-content/80">{{ $notif->data['message'] ?? 'Notification' }}</p>
-                                <p class="text-base-content/40 mt-0.5">{{ $notif->created_at->diffForHumans() }}</p>
+                            <div class="px-4 py-3 text-xs hover:bg-slate-50">
+                                <p class="text-slate-700 font-medium">{{ $notif->data['message'] ?? 'Notification' }}</p>
+                                <p class="text-slate-400 mt-0.5">{{ $notif->created_at->diffForHumans() }}</p>
                             </div>
                             @empty
-                            <div class="px-4 py-5 text-center text-xs text-base-content/40">Aucune notification</div>
+                            <div class="px-4 py-6 text-center text-xs text-slate-400">
+                                <svg class="w-8 h-8 mx-auto mb-2 text-slate-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6 6 0 10-12 0v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
+                                </svg>
+                                Aucune notification
+                            </div>
                             @endforelse
                         </div>
                     </div>
                 </div>
 
+                {{-- Divider --}}
+                <div class="w-px h-6 bg-slate-200"></div>
+
                 {{-- User menu --}}
                 <div class="dropdown dropdown-end">
-                    <button tabindex="0" class="flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-white/15 transition-colors">
-                        <div class="w-7 h-7 bg-linear-to-br from-amber-400 to-orange-500 rounded-full flex items-center justify-center text-white text-xs font-bold shadow shrink-0">
+                    <button tabindex="0" class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg hover:bg-slate-100 transition-colors">
+                        <div class="w-7 h-7 bg-linear-to-br from-indigo-500 to-violet-600 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0">
                             {{ strtoupper(substr(auth()->user()?->name ?? 'U', 0, 1)) }}
                         </div>
-                        <div class="hidden md:block text-left leading-none">
-                            <p class="text-xs font-semibold">{{ Str::limit(auth()->user()?->name ?? '', 16) }}</p>
-                            <p class="text-xs opacity-50 capitalize">{{ auth()->user()?->getRoleNames()->first() ?? '' }}</p>
+                        <div class="hidden md:block text-left leading-tight">
+                            <p class="text-xs font-semibold text-slate-700">{{ Str::limit(auth()->user()?->name ?? '', 18) }}</p>
+                            <p class="text-[11px] text-slate-400 capitalize">{{ auth()->user()?->getRoleNames()->first() ?? '' }}</p>
                         </div>
-                        <svg class="h-3 w-3 opacity-50 hidden md:block" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                        <svg class="h-3.5 w-3.5 text-slate-400 hidden md:block" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
                         </svg>
                     </button>
-                    <ul tabindex="0" class="menu menu-sm dropdown-content z-50 mt-2 shadow-2xl bg-base-100 text-base-content rounded-2xl w-52 p-2 border border-base-200">
-                        <li class="pointer-events-none mb-1">
-                            <div class="px-3 py-2 bg-linear-to-r from-indigo-50 to-violet-50 rounded-lg">
-                                <p class="font-bold text-sm text-indigo-900">{{ auth()->user()?->name }}</p>
-                                <div class="flex flex-wrap gap-1 mt-1">
-                                    @foreach(auth()->user()?->getRoleNames() ?? [] as $r)
-                                    <span class="badge badge-primary badge-xs">{{ $r }}</span>
-                                    @endforeach
-                                </div>
+                    <div tabindex="0" class="dropdown-content z-50 mt-2 w-52 shadow-xl bg-white rounded-xl border border-slate-200 overflow-hidden p-1.5">
+                        <div class="px-3 py-2.5 rounded-lg bg-slate-50 mb-1.5">
+                            <p class="font-semibold text-sm text-slate-800 truncate">{{ auth()->user()?->name }}</p>
+                            <div class="flex flex-wrap gap-1 mt-1">
+                                @foreach(auth()->user()?->getRoleNames() ?? [] as $r)
+                                <span class="badge badge-xs badge-primary">{{ $r }}</span>
+                                @endforeach
                             </div>
-                        </li>
-                        <li>
-                            <form method="POST" action="{{ route('logout') }}">
-                                @csrf
-                                <button type="submit" class="text-error gap-2 w-full text-left px-3 py-2 rounded-lg hover:bg-error/10 transition-colors text-sm">
-                                    <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
-                                    </svg>
-                                    Déconnexion
-                                </button>
-                            </form>
-                        </li>
-                    </ul>
+                        </div>
+                        <form method="POST" action="{{ route('logout') }}">
+                            @csrf
+                            <button type="submit" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+                                <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
+                                </svg>
+                                Déconnexion
+                            </button>
+                        </form>
+                    </div>
                 </div>
-            </div>
-        </nav>
 
-        {{-- Page content --}}
+            </div>
+        </header>
+
+        {{-- ── Page content ───────────────────────────────────────────────── --}}
         <main class="flex-1 p-4 lg:p-6 overflow-x-hidden min-w-0">
             {{ $slot }}
         </main>
 
-        {{-- Footer --}}
-        <footer class="py-3 px-6 bg-base-100 border-t border-base-200 text-center text-xs text-base-content/30">
-            INTEC École &copy; {{ date('Y') }} &mdash; Système de Gestion Scolaire
+        {{-- ── Footer ─────────────────────────────────────────────────────── --}}
+        <footer class="py-2.5 px-6 bg-white border-t border-slate-200 text-center text-xs text-slate-400">
+            INTEC École &copy; {{ date('Y') }} — Système de Gestion Scolaire
         </footer>
     </div>
 
-    {{-- ── Sidebar ───────────────────────────────────────────────────────── --}}
+    {{-- ── Sidebar ────────────────────────────────────────────────────────── --}}
     <div class="drawer-side z-40">
         <label for="sidebar-drawer" aria-label="close sidebar" class="drawer-overlay"></label>
 
-        <aside class="min-h-full w-64 bg-base-100 shadow-xl flex flex-col border-r border-base-200">
+        <aside class="min-h-full w-60 bg-white flex flex-col border-r border-slate-200">
 
-            {{-- Sidebar header --}}
-            <div class="px-4 py-4 bg-linear-to-br from-blue-700 via-indigo-700 to-violet-700 text-white shrink-0">
-                <div class="flex items-center gap-3">
-                    <div class="w-9 h-9 bg-white/20 rounded-xl flex items-center justify-center backdrop-blur shrink-0 overflow-hidden p-1">
-                        <img src="{{ asset('images/in tech.jpg') }}" alt="INTEC" class="w-full h-full object-contain">
-                    </div>
-                    <div class="min-w-0">
-                        <p class="font-bold text-sm leading-tight">INTEC École</p>
-                        <p class="text-xs opacity-60">Gestion Scolaire</p>
-                    </div>
+            {{-- Logo / Brand --}}
+            <div class="flex items-center gap-3 px-4 h-14 border-b border-slate-200 shrink-0">
+                <div class="w-8 h-8 rounded-lg overflow-hidden shrink-0 bg-slate-100 p-0.5">
+                    <img src="{{ asset('images/in tech.jpg') }}" alt="INTEC" class="w-full h-full object-contain">
                 </div>
-                @if($yr)
-                <div class="mt-3 px-2.5 py-1.5 bg-white/15 rounded-lg text-xs flex items-center gap-1.5">
-                    <span>📅</span>
-                    <span class="font-medium truncate">{{ $yr->label }}</span>
+                <div class="min-w-0">
+                    <p class="font-bold text-sm text-slate-800 leading-tight">INTEC École</p>
+                    <p class="text-[11px] text-slate-400">Gestion Scolaire</p>
                 </div>
-                @endif
             </div>
 
-            {{-- Navigation links --}}
-            <nav class="flex-1 px-2 py-3 space-y-0.5 overflow-y-auto">
+            {{-- Navigation --}}
+            <nav class="flex-1 px-2.5 py-3 space-y-0.5 overflow-y-auto">
 
                 {{-- Dashboard --}}
-                <a href="{{ route('dashboard') }}" wire:navigate
-                   onclick="closeSidebar()"
-                   class="nav-link {{ request()->routeIs('dashboard') ? 'active bg-indigo-50 text-indigo-700' : 'text-base-content/70' }}">
-                    <span class="text-base w-5 text-center shrink-0">📊</span>
-                    <span>Tableau de bord</span>
+                <a href="{{ route('dashboard') }}" wire:navigate onclick="closeSidebar()"
+                   class="nav-link {{ request()->routeIs('dashboard') ? 'active' : '' }}">
+                    <span class="nav-icon {{ request()->routeIs('dashboard') ? 'bg-blue-100' : '' }}">📊</span>
+                    Tableau de bord
                 </a>
 
-                {{-- Teacher / Admin section --}}
-                @role('teacher|admin')
-                <p class="px-3 pt-4 pb-1 text-xs font-bold uppercase tracking-widest text-base-content/30">✏️ Bulletins</p>
-                <a href="{{ route('bulletins.grade-form') }}" wire:navigate
-                   onclick="closeSidebar()"
-                   class="nav-link {{ request()->routeIs('bulletins.grade-form') ? 'active bg-amber-50 text-amber-700' : 'text-base-content/70' }}">
-                    <span class="text-base w-5 text-center shrink-0">✏️</span>
-                    <span>Saisie des notes</span>
+                {{-- Bulletins (teacher + admin + direction) --}}
+                @role('teacher|admin|direction')
+                <p class="nav-section">Bulletins</p>
+                <a href="{{ route('bulletins.grade-form') }}" wire:navigate onclick="closeSidebar()"
+                   class="nav-link {{ request()->routeIs('bulletins.grade-form') ? 'active' : '' }}">
+                    <span class="nav-icon {{ request()->routeIs('bulletins.grade-form') ? 'bg-blue-100' : '' }}">✏️</span>
+                    Saisie des notes
                 </a>
                 @endrole
 
                 @role('teacher')
-                <a href="{{ route('bulletins.index') }}" wire:navigate
-                   onclick="closeSidebar()"
-                   class="nav-link {{ request()->routeIs('bulletins.index') ? 'active bg-amber-50 text-amber-700' : 'text-base-content/70' }}">
-                    <span class="text-base w-5 text-center shrink-0">📋</span>
-                    <span>Mes bulletins</span>
+                <a href="{{ route('bulletins.index') }}" wire:navigate onclick="closeSidebar()"
+                   class="nav-link {{ request()->routeIs('bulletins.index') ? 'active' : '' }}">
+                    <span class="nav-icon {{ request()->routeIs('bulletins.index') ? 'bg-blue-100' : '' }}">📋</span>
+                    Mes bulletins
                 </a>
                 @endrole
 
-                {{-- Workflow validation section --}}
+                {{-- Validation workflow --}}
                 @role('pedagogie|finance|direction|admin')
-                <p class="px-3 pt-4 pb-1 text-xs font-bold uppercase tracking-widest text-base-content/30">🔄 Validation</p>
-                <a href="{{ route('bulletins.index') }}" wire:navigate
-                   onclick="closeSidebar()"
-                   class="nav-link {{ request()->routeIs('bulletins.index') ? 'active bg-blue-50 text-blue-700' : 'text-base-content/70' }}">
-                    <span class="text-base w-5 text-center shrink-0">🔄</span>
-                    <span class="flex-1 min-w-0">Workflow bulletins</span>
+                <p class="nav-section">Validation</p>
+                <a href="{{ route('bulletins.index') }}" wire:navigate onclick="closeSidebar()"
+                   class="nav-link {{ request()->routeIs('bulletins.index') ? 'active' : '' }}">
+                    <span class="nav-icon {{ request()->routeIs('bulletins.index') ? 'bg-blue-100' : '' }}">🔄</span>
+                    <span class="flex-1 truncate">Workflow bulletins</span>
                     @php
                         $pendingCount = \App\Models\Bulletin::where('status', match(true) {
                             auth()->user()->hasRole('finance')   => \App\Enums\BulletinStatusEnum::PEDAGOGIE_APPROVED->value,
@@ -255,76 +262,87 @@
                         })->count();
                     @endphp
                     @if($pendingCount > 0)
-                    <span class="badge badge-sm bg-red-500 text-white border-0 shrink-0">{{ $pendingCount }}</span>
+                    <span class="badge badge-xs bg-red-500 text-white border-0 shrink-0">{{ $pendingCount }}</span>
                     @endif
                 </a>
-                <a href="{{ route('bulletins.suivi') }}" wire:navigate
-                   onclick="closeSidebar()"
-                   class="nav-link {{ request()->routeIs('bulletins.suivi') ? 'active bg-teal-50 text-teal-700' : 'text-base-content/70' }}">
-                    <span class="text-base w-5 text-center shrink-0">📊</span>
-                    <span>Suivi workflow</span>
+                <a href="{{ route('bulletins.suivi') }}" wire:navigate onclick="closeSidebar()"
+                   class="nav-link {{ request()->routeIs('bulletins.suivi') ? 'active' : '' }}">
+                    <span class="nav-icon {{ request()->routeIs('bulletins.suivi') ? 'bg-blue-100' : '' }}">📈</span>
+                    Suivi workflow
                 </a>
                 @endrole
 
                 @role('direction|admin')
-                <a href="{{ route('bulletins.annual') }}" wire:navigate
-                   onclick="closeSidebar()"
-                   class="nav-link {{ request()->routeIs('bulletins.annual') ? 'active bg-teal-50 text-teal-700' : 'text-base-content/70' }}">
-                    <span class="text-base w-5 text-center shrink-0">📈</span>
-                    <span>Bilan annuel</span>
+                <a href="{{ route('bulletins.annual') }}" wire:navigate onclick="closeSidebar()"
+                   class="nav-link {{ request()->routeIs('bulletins.annual') ? 'active' : '' }}">
+                    <span class="nav-icon {{ request()->routeIs('bulletins.annual') ? 'bg-blue-100' : '' }}">📊</span>
+                    Bilan annuel
                 </a>
                 @endrole
 
-                {{-- Configuration section --}}
+                @role('direction|admin')
+                <a href="{{ route('bulletins.template-preview') }}" wire:navigate onclick="closeSidebar()"
+                   class="nav-link {{ request()->routeIs('bulletins.template-preview') ? 'active' : '' }}">
+                    <span class="nav-icon {{ request()->routeIs('bulletins.template-preview') ? 'bg-blue-100' : '' }}">🖨️</span>
+                    Modèles bulletin
+                </a>
+                @endrole
+
+                {{-- Configuration --}}
                 @role('admin|direction')
-                <p class="px-3 pt-4 pb-1 text-xs font-bold uppercase tracking-widest text-base-content/30">⚙️ Configuration</p>
-                <a href="{{ route('setup.classrooms') }}" wire:navigate
-                   onclick="closeSidebar()"
-                   class="nav-link {{ request()->routeIs('setup.classrooms') ? 'active bg-emerald-50 text-emerald-700' : 'text-base-content/70' }}">
-                    <span class="text-base w-5 text-center shrink-0">🏛️</span>
-                    <span>Classes</span>
+                <p class="nav-section">Configuration</p>
+                <a href="{{ route('setup.classrooms') }}" wire:navigate onclick="closeSidebar()"
+                   class="nav-link {{ request()->routeIs('setup.classrooms') ? 'active' : '' }}">
+                    <span class="nav-icon {{ request()->routeIs('setup.classrooms') ? 'bg-blue-100' : '' }}">🏛️</span>
+                    Classes
                 </a>
-                <a href="{{ route('setup.subjects') }}" wire:navigate
-                   onclick="closeSidebar()"
-                   class="nav-link {{ request()->routeIs('setup.subjects') ? 'active bg-emerald-50 text-emerald-700' : 'text-base-content/70' }}">
-                    <span class="text-base w-5 text-center shrink-0">📚</span>
-                    <span>Matières</span>
+                <a href="{{ route('setup.subjects') }}" wire:navigate onclick="closeSidebar()"
+                   class="nav-link {{ request()->routeIs('setup.subjects') ? 'active' : '' }}">
+                    <span class="nav-icon {{ request()->routeIs('setup.subjects') ? 'bg-blue-100' : '' }}">📚</span>
+                    Matières
                 </a>
-                <a href="{{ route('setup.competences') }}" wire:navigate
-                   onclick="closeSidebar()"
-                   class="nav-link {{ request()->routeIs('setup.competences') ? 'active bg-emerald-50 text-emerald-700' : 'text-base-content/70' }}">
-                    <span class="text-base w-5 text-center shrink-0">🎯</span>
-                    <span>Compétences</span>
+                <a href="{{ route('setup.competences') }}" wire:navigate onclick="closeSidebar()"
+                   class="nav-link {{ request()->routeIs('setup.competences') ? 'active' : '' }}">
+                    <span class="nav-icon {{ request()->routeIs('setup.competences') ? 'bg-blue-100' : '' }}">🎯</span>
+                    Compétences
                 </a>
-                <a href="{{ route('setup.students') }}" wire:navigate
-                   onclick="closeSidebar()"
-                   class="nav-link {{ request()->routeIs('setup.students') ? 'active bg-emerald-50 text-emerald-700' : 'text-base-content/70' }}">
-                    <span class="text-base w-5 text-center shrink-0">👥</span>
-                    <span>Élèves</span>
+                <a href="{{ route('setup.students') }}" wire:navigate onclick="closeSidebar()"
+                   class="nav-link {{ request()->routeIs('setup.students') ? 'active' : '' }}">
+                    <span class="nav-icon {{ request()->routeIs('setup.students') ? 'bg-blue-100' : '' }}">👥</span>
+                    Élèves
+                </a>
+                <a href="{{ route('setup.seuils') }}" wire:navigate onclick="closeSidebar()"
+                   class="nav-link {{ request()->routeIs('setup.seuils') ? 'active' : '' }}">
+                    <span class="nav-icon {{ request()->routeIs('setup.seuils') ? 'bg-blue-100' : '' }}">⚙️</span>
+                    Seuils d'admission
+                </a>
+                <a href="{{ route('setup.teachers') }}" wire:navigate onclick="closeSidebar()"
+                   class="nav-link {{ request()->routeIs('setup.teachers') ? 'active' : '' }}">
+                    <span class="nav-icon {{ request()->routeIs('setup.teachers') ? 'bg-blue-100' : '' }}">🧑‍🏫</span>
+                    Enseignants
                 </a>
                 @endrole
 
             </nav>
 
-            {{-- Sidebar user card + logout --}}
-            <div class="px-2 py-3 border-t border-base-200 space-y-2 shrink-0">
-                <div class="flex items-center gap-2.5 px-2.5 py-2 rounded-xl bg-base-200">
-                    <div class="w-7 h-7 bg-linear-to-br from-amber-400 to-orange-500 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0">
+            {{-- User card at bottom --}}
+            <div class="px-3 py-3 border-t border-slate-200 shrink-0">
+                <div class="flex items-center gap-2.5 p-2.5 rounded-xl bg-slate-50">
+                    <div class="w-8 h-8 bg-linear-to-br from-indigo-500 to-violet-600 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0">
                         {{ strtoupper(substr(auth()->user()?->name ?? 'U', 0, 1)) }}
                     </div>
                     <div class="flex-1 min-w-0">
-                        <p class="text-xs font-semibold truncate text-base-content">{{ auth()->user()?->name }}</p>
-                        <p class="text-xs text-base-content/40 capitalize truncate">
+                        <p class="text-xs font-semibold truncate text-slate-700">{{ auth()->user()?->name }}</p>
+                        <p class="text-[11px] text-slate-400 capitalize truncate">
                             {{ auth()->user()?->getRoleNames()->join(', ') }}
                         </p>
                     </div>
                     <form method="POST" action="{{ route('logout') }}" class="shrink-0">
                         @csrf
-                        <button type="submit"
-                            class="btn btn-xs btn-square btn-error btn-outline hover:btn-error"
-                            title="Déconnexion">
-                            <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
+                        <button type="submit" title="Déconnexion"
+                            class="w-7 h-7 flex items-center justify-center rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors">
+                            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
                             </svg>
                         </button>
                     </form>
@@ -340,9 +358,7 @@
 <script>
     function closeSidebar() {
         const toggle = document.getElementById('sidebar-drawer');
-        if (toggle && window.innerWidth < 1024) {
-            toggle.checked = false;
-        }
+        if (toggle && window.innerWidth < 1024) toggle.checked = false;
     }
 </script>
 

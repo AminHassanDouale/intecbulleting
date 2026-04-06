@@ -35,13 +35,11 @@ class StudentsExport implements FromCollection, WithHeadings, WithStyles, WithTi
 
         return $query
             ->orderBy('classroom_id')
-            ->orderBy('last_name')
-            ->orderBy('first_name')
+            ->orderBy('full_name')
             ->get()
             ->map(fn($student) => [
                 'matricule'      => $student->matricule,
-                'nom'            => $student->last_name,
-                'prenom'         => $student->first_name,
+                'nom_complet'    => $student->full_name,
                 'date_naissance' => $student->birth_date?->format('d/m/Y') ?? '',
                 'genre'          => $student->gender,
                 'code_classe'    => $student->classroom?->code ?? '',

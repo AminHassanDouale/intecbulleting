@@ -24,9 +24,8 @@ class GradesExport implements FromCollection, WithHeadings, WithStyles
             ->with(['student', 'grades.competence.subject'])
             ->get()
             ->map(fn($b) => [
-                'matricule' => $b->student->matricule,
-                'nom'       => $b->student->last_name,
-                'prenom'    => $b->student->first_name,
+                'matricule'   => $b->student->matricule,
+                'nom_complet' => $b->student->full_name,
                 'moyenne'   => $b->moyenne,
                 'total'     => $b->total_score,
                 'statut'    => $b->status->label(),
@@ -35,7 +34,7 @@ class GradesExport implements FromCollection, WithHeadings, WithStyles
 
     public function headings(): array
     {
-        return ['Matricule', 'Nom', 'Prénom', 'Moyenne/20', 'Total', 'Statut'];
+        return ['Matricule', 'Nom Complet', 'Moyenne/20', 'Total', 'Statut'];
     }
 
     public function styles(Worksheet $sheet): array

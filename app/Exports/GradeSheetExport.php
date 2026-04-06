@@ -100,7 +100,7 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
             ? \App\Models\User::find($this->teacherId)?->name ?? 'Enseignant #' . $this->teacherId
             : 'Tous enseignants';
 
-        $subjectRow = ['Matricule', 'Nom', 'Prénom'];
+        $subjectRow = ['Matricule', 'Nom Complet'];
         foreach ($this->subjectMap as $info) {
             $subjectRow[] = $info['subject']->name;
             for ($i = 1; $i < $info['competence_count']; $i++) {
@@ -111,7 +111,7 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
         $rows[] = $subjectRow;
 
         // ── Row 2: Competence codes ───────────────────────────────────────────
-        $codeRow = ['', '', ''];
+        $codeRow = ['', ''];
         foreach ($this->subjects as $subject) {
             foreach ($subject->competences as $competence) {
                 $codeRow[] = $competence->code;
@@ -121,7 +121,7 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
         $rows[] = $codeRow;
 
         // ── Row 3: Competence names ───────────────────────────────────────────
-        $nameRow = ['', '', ''];
+        $nameRow = ['', ''];
         foreach ($this->subjects as $subject) {
             foreach ($subject->competences as $competence) {
                 $nameRow[] = $competence->name;
@@ -131,7 +131,7 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
         $rows[] = $nameRow;
 
         // ── Row 4: Max scores / scale hint ────────────────────────────────────
-        $maxRow = ['Période: ' . $periodLabel, '', ''];
+        $maxRow = ['Période: ' . $periodLabel, ''];
         foreach ($this->subjects as $subject) {
             $isPrescolaire = $subject->scale_type === 'competence';
             foreach ($subject->competences as $competence) {
@@ -145,8 +145,7 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
 
         // ── Rows 5+: Student data ─────────────────────────────────────────────
         $students = Student::where('classroom_id', $this->classroomId)
-            ->orderBy('last_name')
-            ->orderBy('first_name')
+            ->orderBy('full_name')
             ->get();
 
         Log::info('GradeSheetExport: exporting students', [
@@ -155,7 +154,7 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
         ]);
 
         if ($students->isEmpty()) {
-            $row = ['---', 'Aucun élève', 'dans cette classe'];
+            $row = ['---', 'Aucun élève dans cette classe'];
             foreach ($this->subjects as $subject) {
                 foreach ($subject->competences as $competence) {
                     $row[] = '';
@@ -174,9 +173,8 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
                 ->first();
 
             $row = [
-                $student->matricule  ?? '',
-                $student->last_name  ?? '',
-                $student->first_name ?? '',
+                $student->matricule ?? '',
+                $student->full_name ?? '',
             ];
 
             foreach ($this->subjects as $subject) {

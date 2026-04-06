@@ -51,15 +51,14 @@
                 @if($subject->isPrescolaire())
                     {{-- Prescolaire: A / EVA / NA --}}
                     @if($canEdit)
-                        <select
+                        <x-choices
                             wire:model.live="grades.{{ $competence->id }}"
-                            class="select select-bordered select-xs w-28"
-                        >
-                            <option value="">—</option>
-                            @foreach($competenceOptions as $opt)
-                                <option value="{{ $opt['id'] }}">{{ $opt['name'] }}</option>
-                            @endforeach
-                        </select>
+                            :options="$competenceOptions"
+                            single
+                            clearable
+                            class="w-36"
+                            placeholder="—"
+                        />
                     @else
                         @php $val = $grades[$competence->id] ?? null; @endphp
                         <span class="badge badge-sm font-semibold

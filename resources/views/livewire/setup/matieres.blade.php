@@ -152,10 +152,11 @@ new #[Layout('components.layouts.app')] class extends Component {
                 clearable
                 class="flex-1"
             />
-            <x-select
+            <x-choices
                 wire:model.live="filterNiveau"
                 :options="$niveauxFilter"
-                class="select-sm"
+                single clearable
+                placeholder="Niveau…"
             />
         </div>
     </div>
@@ -218,9 +219,9 @@ new #[Layout('components.layouts.app')] class extends Component {
             <div class="grid grid-cols-2 gap-4">
                 <x-input label="Nom de la matière" wire:model="name" placeholder="MATHÉMATIQUES" icon="o-book-open" />
                 <x-input label="Code" wire:model="code" placeholder="MATHS" icon="o-tag" hint="Code court unique" />
-                <x-select label="Niveau" wire:model="niveau_id" :options="$niveaux" icon="o-academic-cap" />
-                <x-select label="Classe spécifique" wire:model="classroom_code" :options="$classCodes" icon="o-building-library" hint="Vide = toutes classes" />
-                <x-select label="Type de barème" wire:model="scale_type" :options="$scaleTypes" icon="o-chart-bar" />
+                <x-choices label="Niveau" wire:model="niveau_id" :options="$niveaux" single clearable icon="o-academic-cap" />
+                <x-choices label="Classe spécifique" wire:model="classroom_code" :options="$classCodes" single clearable icon="o-building-library" hint="Vide = toutes classes" />
+                <x-choices label="Type de barème" wire:model="scale_type" :options="$scaleTypes" single clearable icon="o-chart-bar" />
                 <x-input label="Note maximale" wire:model="max_score" type="number" min="1" icon="o-star" />
                 <div class="col-span-2">
                     <x-input label="Ordre d'affichage" wire:model="order" type="number" min="0" icon="o-arrows-up-down" hint="Les matières sont triées par cet ordre" />

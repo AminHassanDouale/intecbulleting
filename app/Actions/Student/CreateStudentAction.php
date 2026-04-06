@@ -13,8 +13,7 @@ class CreateStudentAction
 
         return Student::create([
             'matricule'        => $data['matricule'] ?? $this->generateMatricule(),
-            'first_name'       => $data['first_name'],
-            'last_name'        => $data['last_name'],
+            'full_name'        => $data['full_name'],
             'birth_date'       => $data['birth_date'],
             'gender'           => $data['gender'],
             'classroom_id'     => $data['classroom_id'],

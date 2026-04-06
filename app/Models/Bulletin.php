@@ -174,6 +174,19 @@ class Bulletin extends Model implements HasMedia
         ]);
     }
 
+    /**
+     * Direction/admin can edit grades inline when the bulletin is pending their review
+     * or already approved (before publication).
+     */
+    public function canDirectionEdit(): bool
+    {
+        return in_array($this->status, [
+            BulletinStatusEnum::FINANCE_APPROVED,
+            BulletinStatusEnum::DIRECTION_REVIEW,
+            BulletinStatusEnum::APPROVED,
+        ]);
+    }
+
     public function getPdfUrl(): ?string
     {
         return $this->getFirstMediaUrl('bulletin_pdf') ?: null;

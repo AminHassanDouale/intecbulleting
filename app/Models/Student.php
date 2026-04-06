@@ -10,9 +10,31 @@ class Student extends Model
     use SoftDeletes;
 
     protected $fillable = [
-        'matricule', 'first_name', 'last_name', 'birth_date',
+        'matricule', 'full_name', 'birth_date',
         'gender', 'classroom_id', 'academic_year_id',
     ];
+
+    protected static function boot(): void
+    {
+        parent::boot();
+
+        static::creating(function (Student $student) {
+            if (empty($student->matricule)) {
+                $student->matricule = static::generateMatricule();
+            }
+        });
+    }
+
+    public static function generateMatricule(): string
+    {
+        $year = date('Y');
+        do {
+            $n    = str_pad((static::withTrashed()->max('id') ?? 0) + 1 + rand(0, 9), 4, '0', STR_PAD_LEFT);
+            $code = "INTEC-{$year}-{$n}";
+        } while (static::withTrashed()->where('matricule', $code)->exists());
+
+        return $code;
+    }
 
     protected $casts = [
         'birth_date' => 'date',
@@ -33,8 +55,4 @@ class Student extends Model
         return $this->hasMany(Bulletin::class);
     }
 
-    public function getFullNameAttribute(): string
-    {
-        return strtoupper($this->last_name) . ' ' . ucfirst(strtolower($this->first_name));
-    }
 }

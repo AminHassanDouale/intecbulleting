@@ -461,7 +461,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             $period = $this->selectedPeriod;
 
             $students = Student::where('classroom_id', $this->selectedClassroom)
-                ->orderBy('last_name')
+                ->orderBy('full_name')
                 ->get()
                 ->map(function ($s) use ($yearId, $period, $userId) {
                     $bulletins = Bulletin::where('student_id', $s->id)
@@ -556,9 +556,16 @@ new #[Layout('components.layouts.app')] class extends Component {
     <div class="card bg-base-100 shadow">
         <div class="card-body py-4 px-5">
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <x-select label="Année scolaire"  wire:model.live="selectedYear"         :options="$years"                 placeholder="Sélectionner…" icon="o-calendar" />
-                <x-select label="Niveau"           wire:model.live="selectedNiveau"      :options="$niveaux"               placeholder="Sélectionner…" icon="o-academic-cap" />
-                <x-select label="Classe"           wire:model.live="selectedClassroom"   :options="$classrooms->toArray()" placeholder="{{ $selectedNiveau ? 'Sélectionner…' : '— Choisir un niveau —' }}" :disabled="!$selectedNiveau" icon="o-building-library" />
+                <x-choices label="Année scolaire" wire:model.live="selectedYear"   :options="$years"   single clearable placeholder="Sélectionner…" icon="o-calendar" />
+                <x-select  label="Niveau"          wire:model.live="selectedNiveau" :options="$niveaux" placeholder="Sélectionner…" icon="o-academic-cap" class="select-bordered bg-base-100" />
+                <x-select  label="Classe"
+                    wire:model.live="selectedClassroom"
+                    :options="$classrooms->toArray()"
+                    placeholder="{{ $selectedNiveau ? 'Sélectionner…' : '— Choisir un niveau —' }}"
+                    :disabled="!$selectedNiveau"
+                    icon="o-building-library"
+                    class="select-bordered bg-base-100"
+                />
             </div>
         </div>
     </div>
@@ -643,7 +650,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 
             <div class="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-base-200/40 transition-colors rounded-2xl" wire:click="selectStudent({{ $student->id }})">
                 <div class="w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm shrink-0 {{ $student->gender === 'M' ? 'bg-blue-100 text-blue-700' : 'bg-pink-100 text-pink-700' }}">
-                    {{ substr($student->first_name,0,1) }}{{ substr($student->last_name,0,1) }}
+                    {{ strtoupper(substr($student->full_name,0,1)) }}
                 </div>
                 <div class="flex-1 min-w-0">
                     <p class="font-semibold text-sm truncate">{{ $student->full_name }}</p>

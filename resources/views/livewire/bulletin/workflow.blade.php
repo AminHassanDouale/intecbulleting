@@ -12,7 +12,11 @@ new #[Layout('components.layouts.app')] class extends Component {
     use Toast;
 
     public Bulletin $bulletin;
-    public string $approvalComment = '';
+    public string   $approvalComment = '';
+
+    // ── Direction grade editing ────────────────────────────────────────────────
+    public bool  $editingGrades = false;
+    public array $gradeEdits    = [];  // [gradeId => value]
 
     public function mount(Bulletin $bulletin): void
     {
@@ -75,6 +79,47 @@ new #[Layout('components.layouts.app')] class extends Component {
     public function canAct(): bool
     {
         return auth()->user()->can('approve', $this->bulletin);
+    }
+
+    public function startEditGrades(): void
+    {
+        $this->gradeEdits = [];
+        foreach ($this->bulletin->grades as $grade) {
+            $this->gradeEdits[$grade->id] = $grade->score !== null
+                ? (string) $grade->score
+                : ($grade->competence_status?->value ?? '');
+        }
+        $this->editingGrades = true;
+    }
+
+    public function saveGrades(): void
+    {
+        $this->authorize('approve', $this->bulletin);
+
+        foreach ($this->gradeEdits as $gradeId => $rawValue) {
+            $grade = $this->bulletin->grades->find((int) $gradeId);
+            if (! $grade) {
+                continue;
+            }
+
+            if ($grade->score !== null || (is_numeric($rawValue) && $rawValue !== '')) {
+                // Numeric grade
+                $grade->update([
+                    'score' => (is_numeric($rawValue) && $rawValue !== '')
+                        ? min((float) $rawValue, $grade->competence->max_score ?? PHP_INT_MAX)
+                        : null,
+                ]);
+            } else {
+                // Competence-status grade
+                $grade->update(['competence_status' => $rawValue !== '' ? $rawValue : null]);
+            }
+        }
+
+        $this->bulletin->recalculateMoyenne();
+        $this->bulletin->refresh()->load(['grades.competence.subject', 'student.classroom.niveau']);
+        $this->editingGrades = false;
+
+        $this->success('Notes mises à jour !', 'La moyenne a été recalculée.', icon: 'o-check-circle', position: 'toast-top toast-end');
     }
 
     public function with(): array
@@ -363,6 +408,84 @@ new #[Layout('components.layouts.app')] class extends Component {
                     icon="o-arrow-uturn-left"
                 />
             </div>
+        </div>
+    </div>
+    @endif
+
+    {{-- Direction grade editing panel --}}
+    @if(auth()->user()->hasAnyRole(['direction', 'admin']) && $bulletin->canDirectionEdit())
+    <div class="card bg-base-100 shadow border border-amber-200">
+        <div class="card-body space-y-4">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 bg-amber-100 text-amber-700 rounded-xl flex items-center justify-center text-xl">✏️</div>
+                    <div>
+                        <h3 class="font-bold">Modifier les notes</h3>
+                        <p class="text-xs text-base-content/50">La direction peut corriger les notes directement avant approbation.</p>
+                    </div>
+                </div>
+                @if(! $editingGrades)
+                <x-button label="Modifier" wire:click="startEditGrades" class="btn-warning btn-sm" icon="o-pencil" />
+                @endif
+            </div>
+
+            @if($editingGrades)
+            <div class="space-y-3 max-h-96 overflow-y-auto pr-1">
+                @foreach($bulletin->grades->groupBy('competence.subject_id') as $subjectGrades)
+                @php $subject = $subjectGrades->first()->competence->subject; @endphp
+                <div>
+                    <div class="flex items-center gap-2 bg-amber-50 px-3 py-1.5 rounded-lg mb-1">
+                        <span class="text-sm font-bold text-amber-700">{{ $subject->name }}</span>
+                        <span class="badge badge-outline badge-xs">{{ $subject->code }}</span>
+                    </div>
+                    @foreach($subjectGrades as $grade)
+                    <div class="flex items-center justify-between px-3 py-2 text-sm border-b border-base-100 gap-3">
+                        <span class="text-base-content/70 flex-1 truncate">
+                            <span class="font-mono text-xs text-primary/70 mr-1">{{ $grade->competence->code }}</span>
+                            {{ Str::limit($grade->competence->description, 50) }}
+                        </span>
+                        @if($grade->score !== null || (isset($gradeEdits[$grade->id]) && is_numeric($gradeEdits[$grade->id])))
+                        <div class="flex items-center gap-1 shrink-0">
+                            <input
+                                type="number"
+                                wire:model="gradeEdits.{{ $grade->id }}"
+                                min="0"
+                                max="{{ $grade->competence->max_score }}"
+                                step="0.5"
+                                class="input input-bordered input-xs w-20 text-right font-bold"
+                            />
+                            <span class="text-xs text-base-content/40">/{{ $grade->competence->max_score }}</span>
+                        </div>
+                        @else
+                        <select wire:model="gradeEdits.{{ $grade->id }}" class="select select-bordered select-xs w-32 shrink-0">
+                            <option value="">— Choisir</option>
+                            <option value="A">Acquis</option>
+                            <option value="EVA">En voie</option>
+                            <option value="NA">Non acquis</option>
+                        </select>
+                        @endif
+                    </div>
+                    @endforeach
+                </div>
+                @endforeach
+            </div>
+            <div class="flex gap-3 pt-2 border-t border-base-200">
+                <x-button
+                    label="Enregistrer les modifications"
+                    wire:click="saveGrades"
+                    class="btn-warning flex-1"
+                    spinner="saveGrades"
+                    icon="o-check"
+                    wire:confirm="Enregistrer les notes modifiées ?"
+                />
+                <x-button
+                    label="Annuler"
+                    wire:click="$set('editingGrades', false)"
+                    class="btn-ghost"
+                    icon="o-x-mark"
+                />
+            </div>
+            @endif
         </div>
     </div>
     @endif

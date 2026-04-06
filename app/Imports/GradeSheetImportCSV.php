@@ -157,7 +157,7 @@ class GradeSheetImportCSV
             $value = strtolower(trim((string) $cell));
 
             // Skip identity and comment columns
-            if (in_array($value, ['matricule', 'nom', 'prenom', 'commentaire', ''], true)) {
+            if (in_array($value, ['matricule', 'nom_complet', 'nom complet', 'nom', 'prenom', 'commentaire', ''], true)) {
                 continue;
             }
 

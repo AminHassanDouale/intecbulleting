@@ -18,6 +18,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $filterNiveau  = '';
     public string $filterClass   = '';
     public string $filterSection = '';
+    public bool   $showFilters   = false;
 
     const TZ = 'Africa/Djibouti';
 
@@ -252,45 +253,47 @@ new #[Layout('components.layouts.app')] class extends Component {
         </div>
     </div>
 
-    {{-- ── Filters ───────────────────────────────────────────────────────── --}}
-    <div class="card bg-base-100 shadow-sm border border-base-200">
-        <div class="card-body p-4">
-            <div class="flex items-center justify-between mb-3">
-                <div class="flex items-center gap-2">
-                    <svg class="w-4 h-4 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                              d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2a1 1 0 01-.293.707L13 13.414V19a1 1 0 01-.553.894l-4 2A1 1 0 017 21v-7.586L3.293 6.707A1 1 0 013 6V4z"/>
-                    </svg>
-                    <span class="text-xs font-bold text-base-content/60 uppercase tracking-wide">Filtres</span>
-                </div>
-                <button
-                    wire:click="$set('filterNiveau',''); $set('filterClass',''); $set('filterSection','')"
-                    class="text-xs text-primary hover:text-primary/70 flex items-center gap-1 transition-colors">
-                    <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
-                    </svg>
-                    Réinitialiser
-                </button>
-            </div>
-            <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-                <x-select wire:model.live="filterYear"    :options="$yearOptions"    placeholder="Année scolaire"  icon="o-calendar"         class="select-sm"/>
-                <x-select wire:model.live="filterPeriod"  :options="$periodOptions"  placeholder="Trimestre"       icon="o-clock"            class="select-sm"/>
-                <x-select wire:model.live="filterNiveau"  :options="$niveauOptions"  placeholder="Niveau"          icon="o-academic-cap"     class="select-sm"/>
-                <x-select wire:model.live="filterClass"   :options="$classOptions"   placeholder="Classe"          icon="o-building-library" class="select-sm"/>
-                <x-select wire:model.live="filterSection" :options="$sectionOptions" placeholder="Section"         icon="o-tag"              class="select-sm"/>
-            </div>
-            @if(count($classStats) > 0)
-            <div class="mt-3 pt-3 border-t border-base-200 flex items-center gap-3 flex-wrap text-xs text-base-content/40">
-                <span>{{ count($classStats) }} classe(s)</span>
-                <span>·</span>
-                <span>{{ collect($classStats)->sum('total') }} bulletin(s)</span>
-                <span>·</span>
-                <span>{{ collect($classStats)->sum('publishedCount') }} publié(s)</span>
-            </div>
+    {{-- ── Filter button + active count ──────────────────────────────────── --}}
+    <div class="flex items-center gap-3">
+        <div class="relative">
+            <x-button icon="o-funnel" label="Filtres" @click="$wire.showFilters = true" class="btn-outline" />
+            @php $activeFilters = ($filterYear ? 1 : 0) + ($filterPeriod ? 1 : 0) + ($filterNiveau ? 1 : 0) + ($filterClass ? 1 : 0) + ($filterSection ? 1 : 0); @endphp
+            @if($activeFilters)
+            <span class="absolute -top-1.5 -right-1.5 badge badge-warning badge-xs font-bold">{{ $activeFilters }}</span>
             @endif
         </div>
+        @if($activeFilters)
+        <div class="flex flex-wrap gap-2 text-xs">
+            @if($filterYear)    <span class="badge badge-ghost">📅 Année</span> @endif
+            @if($filterPeriod)  <span class="badge badge-ghost">🕐 {{ $filterPeriod }}</span> @endif
+            @if($filterNiveau)  <span class="badge badge-ghost">📚 Niveau</span> @endif
+            @if($filterClass)   <span class="badge badge-ghost">🏫 Classe</span> @endif
+            @if($filterSection) <span class="badge badge-ghost">🔖 {{ $filterSection }}</span> @endif
+        </div>
+        @endif
+        @if(count($classStats) > 0)
+        <div class="ml-auto flex items-center gap-3 text-xs text-base-content/40">
+            <span>{{ count($classStats) }} classe(s)</span>
+            <span>·</span>
+            <span>{{ collect($classStats)->sum('total') }} bulletin(s)</span>
+            <span>·</span>
+            <span>{{ collect($classStats)->sum('publishedCount') }} publié(s)</span>
+        </div>
+        @endif
     </div>
+
+    {{-- Filter drawer --}}
+    <x-filter-drawer model="showFilters" title="Filtres" subtitle="Affiner le suivi des bulletins">
+        <x-choices label="Année scolaire" wire:model.live="filterYear"    :options="$yearOptions"    single clearable icon="o-calendar"         placeholder="Toutes les années" />
+        <x-choices label="Trimestre"      wire:model.live="filterPeriod"  :options="$periodOptions"  single clearable icon="o-clock"            placeholder="Tous les trimestres" />
+        <x-choices label="Niveau"         wire:model.live="filterNiveau"  :options="$niveauOptions"  single clearable icon="o-academic-cap"     placeholder="Tous les niveaux" />
+        <x-choices label="Classe"         wire:model.live="filterClass"   :options="$classOptions"   single clearable icon="o-building-library" placeholder="Toutes les classes" />
+        <x-choices label="Section"        wire:model.live="filterSection" :options="$sectionOptions" single clearable icon="o-tag"              placeholder="Toutes les sections" />
+        <x-slot:actions>
+            <x-button label="Réinitialiser" wire:click="$set('filterNiveau',''); $set('filterClass',''); $set('filterSection',''); $set('filterYear',''); $set('filterPeriod','')" icon="o-arrow-path" />
+            <x-button label="Fermer" @click="$wire.showFilters = false" class="btn-primary" icon="o-check" />
+        </x-slot:actions>
+    </x-filter-drawer>
 
     {{-- ── Class cards ──────────────────────────────────────────────────── --}}
     @forelse($classStats as $stat)

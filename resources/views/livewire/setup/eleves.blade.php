@@ -2,6 +2,7 @@
 
 use App\Actions\Student\CreateStudentAction;
 use App\Exports\StudentsExport;
+use App\Exports\StudentsTemplateExport;
 use App\Imports\StudentsImport;
 use App\Models\Classroom;
 use App\Models\Student;
@@ -19,12 +20,12 @@ new #[Layout('components.layouts.app')] class extends Component {
     public bool   $showModal    = false;
     public ?int   $editId       = null;
     public string $search       = '';
-    public string $filterGender = '';
-    public string $filterClass  = '';
+    public ?string $filterGender = null;
+    public ?string $filterClass  = null;
+    public bool    $showFilters  = false;
 
     public string  $matricule    = '';
-    public string  $first_name   = '';
-    public string  $last_name    = '';
+    public string  $full_name    = '';
     public string  $birth_date   = '';
     public string  $gender       = 'M';
     public ?int    $classroom_id = null;
@@ -36,14 +37,13 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     public function openModal(?int $studentId = null): void
     {
-        $this->reset(['matricule','first_name','last_name','birth_date','gender','classroom_id','editId']);
+        $this->reset(['matricule','full_name','birth_date','gender','classroom_id','editId']);
         $this->gender = 'M';
         if ($studentId) {
             $s = Student::findOrFail($studentId);
             $this->editId       = $s->id;
             $this->matricule    = $s->matricule;
-            $this->first_name   = $s->first_name;
-            $this->last_name    = $s->last_name;
+            $this->full_name    = $s->full_name;
             $this->birth_date   = $s->birth_date->format('Y-m-d');
             $this->gender       = $s->gender;
             $this->classroom_id = $s->classroom_id;
@@ -55,8 +55,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     {
         $data = $this->validate([
             'matricule'    => 'nullable|string|unique:students,matricule,' . ($this->editId ?? 'NULL'),
-            'first_name'   => 'required|string|max:100',
-            'last_name'    => 'required|string|max:100',
+            'full_name'    => 'required|string|max:200',
             'birth_date'   => 'required|date',
             'gender'       => 'required|in:M,F',
             'classroom_id' => 'required|exists:classrooms,id',
@@ -80,11 +79,19 @@ new #[Layout('components.layouts.app')] class extends Component {
     }
 
     #[Renderless]
+    public function downloadTemplate(): mixed
+    {
+        return Excel::download(
+            new StudentsTemplateExport(),
+            'modele_import_eleves.xlsx'
+        );
+    }
+
+    #[Renderless]
     public function exportStudents(): mixed
     {
-        $classroomId = $this->filterClass ?: null;
         return Excel::download(
-            new StudentsExport($classroomId),
+            new StudentsExport($this->filterClass ?: null),
             'eleves_' . now()->format('Ymd_His') . '.xlsx'
         );
     }
@@ -104,11 +111,15 @@ new #[Layout('components.layouts.app')] class extends Component {
             Excel::import($importer, $fullPath);
             \Illuminate\Support\Facades\Storage::disk('local')->delete($stored);
             $this->importFile = null;
-            $this->success(
-                "Import réussi ! {$importer->imported} élève(s) ajouté(s), {$importer->skipped} ignoré(s).",
-                icon: 'o-arrow-up-tray',
-                position: 'toast-top toast-end'
-            );
+
+            $stats   = $importer->getStats();
+            $message = "{$stats['imported']} ajouté(s), {$stats['updated']} mis à jour, {$stats['skipped']} ignoré(s).";
+
+            if (! empty($stats['errors'])) {
+                $this->warning("Import terminé. {$message}", implode(' | ', array_slice($stats['errors'], 0, 3)), icon: 'o-exclamation-triangle', position: 'toast-top toast-end');
+            } else {
+                $this->success("Import réussi ! {$message}", icon: 'o-arrow-up-tray', position: 'toast-top toast-end');
+            }
         } catch (\Throwable $e) {
             $this->error('Erreur import', $e->getMessage(), icon: 'o-x-circle', position: 'toast-top toast-end');
         }
@@ -118,13 +129,12 @@ new #[Layout('components.layouts.app')] class extends Component {
     {
         $students = Student::with(['classroom.niveau'])
             ->when($this->search, fn($q) =>
-                $q->where('first_name', 'like', "%{$this->search}%")
-                  ->orWhere('last_name',  'like', "%{$this->search}%")
-                  ->orWhere('matricule',  'like', "%{$this->search}%")
+                $q->where('full_name', 'like', "%{$this->search}%")
+                  ->orWhere('matricule', 'like', "%{$this->search}%")
             )
             ->when($this->filterGender, fn($q) => $q->where('gender', $this->filterGender))
             ->when($this->filterClass,  fn($q) => $q->where('classroom_id', $this->filterClass))
-            ->orderBy('last_name')
+            ->orderBy('full_name')
             ->paginate(25);
 
         $totalCount  = Student::count();
@@ -150,6 +160,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             'headers'     => [
                 ['key' => 'full_name',  'label' => 'Élève'],
                 ['key' => 'birth_date', 'label' => 'Naissance'],
+                ['key' => 'age',        'label' => 'Âge'],
                 ['key' => 'gender',     'label' => 'Genre'],
                 ['key' => 'classroom',  'label' => 'Classe'],
             ],
@@ -175,7 +186,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         </div>
     </div>
 
-    {{-- Stats + filters --}}
+    {{-- Stats + search + filter button --}}
     <div class="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
         <div class="flex gap-3 flex-wrap">
             <div class="stat bg-base-100 shadow rounded-xl py-2 px-4 min-w-0">
@@ -191,42 +202,78 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <div class="stat-value text-2xl text-pink-500">{{ $filles }}</div>
             </div>
         </div>
-        <div class="flex gap-2 flex-1 sm:max-w-lg ml-auto flex-wrap sm:flex-nowrap">
+        <div class="flex gap-2 flex-1 ml-auto">
             <x-input
                 wire:model.live.debounce.300="search"
-                placeholder="Nom, prénom, matricule…"
+                placeholder="Nom, matricule…"
                 icon="o-magnifying-glass"
                 clearable
                 class="flex-1"
             />
-            <x-select wire:model.live="filterGender" :options="$genderFilter" class="select-sm w-32" />
-            <x-select wire:model.live="filterClass"  :options="$classFilter"  class="select-sm" placeholder="Classe…" />
+            <div class="relative">
+                <x-button icon="o-funnel" @click="$wire.showFilters = true" class="btn-outline" tooltip="Filtres" />
+                @php $activeFilters = ($filterGender ? 1 : 0) + ($filterClass ? 1 : 0); @endphp
+                @if($activeFilters)
+                <span class="absolute -top-1.5 -right-1.5 badge badge-warning badge-xs font-bold">{{ $activeFilters }}</span>
+                @endif
+            </div>
         </div>
     </div>
 
+    {{-- Filter drawer --}}
+    <x-filter-drawer model="showFilters" title="Filtres" subtitle="Affiner la liste des élèves">
+        <x-choices label="Genre" wire:model.live="filterGender" :options="$genderFilter" single clearable icon="o-user-circle" placeholder="Tous" />
+        <x-choices label="Classe" wire:model.live="filterClass" :options="$classFilter" single clearable icon="o-building-library" placeholder="Toutes les classes" />
+        <x-slot:actions>
+            <x-button label="Réinitialiser" wire:click="$set('filterGender', null); $set('filterClass', null)" icon="o-arrow-path" />
+            <x-button label="Fermer" @click="$wire.showFilters = false" class="btn-primary" icon="o-check" />
+        </x-slot:actions>
+    </x-filter-drawer>
+
     {{-- Export / Import toolbar --}}
     <div class="card bg-base-100 shadow-sm border border-base-200">
-        <div class="card-body py-3 px-4">
+        <div class="card-body py-3 px-4 space-y-3">
+
+            {{-- Row 1: template + export --}}
             <div class="flex flex-wrap items-center gap-3">
-                <div class="flex-1 min-w-0">
-                    <p class="font-semibold text-sm text-base-content/70">
-                        📊 Export / Import Excel
-                        <span class="text-base-content/40 font-normal text-xs ml-1">
-                            — Format : Matricule, Nom, Prenom, Date Naissance, Genre, Code Classe, Section
-                        </span>
-                    </p>
-                </div>
+                <p class="font-semibold text-xs text-base-content/50 w-20 shrink-0">MODÈLE</p>
                 <x-button
-                    label="⬇ Exporter"
+                    label="📄 Télécharger le modèle"
+                    wire:click="downloadTemplate"
+                    class="btn-outline btn-sm btn-success"
+                    spinner="downloadTemplate"
+                    icon="o-document-arrow-down"
+                    tooltip="Télécharger le fichier Excel modèle à remplir pour l'import"
+                />
+                <span class="text-xs text-base-content/40 hidden sm:inline">
+                    — Le fichier contient les colonnes requises avec des exemples + la liste des classes disponibles
+                </span>
+            </div>
+
+            <div class="divider my-0"></div>
+
+            {{-- Row 2: export current list --}}
+            <div class="flex flex-wrap items-center gap-3">
+                <p class="font-semibold text-xs text-base-content/50 w-20 shrink-0">EXPORT</p>
+                <x-button
+                    label="⬇ Exporter la liste"
                     wire:click="exportStudents"
                     class="btn-outline btn-sm"
                     spinner="exportStudents"
                     icon="o-arrow-down-tray"
-                    tooltip="Exporter la liste filtrée"
+                    tooltip="Exporter les élèves affichés (selon filtres actifs)"
                 />
+                <span class="text-xs text-base-content/40 hidden sm:inline">— Exporte selon les filtres actifs (classe, genre)</span>
+            </div>
+
+            <div class="divider my-0"></div>
+
+            {{-- Row 3: import --}}
+            <div class="flex flex-wrap items-center gap-3">
+                <p class="font-semibold text-xs text-base-content/50 w-20 shrink-0">IMPORT</p>
                 <div class="flex items-end gap-2">
                     <div>
-                        <label class="label-text text-xs mb-1 block">Importer un fichier</label>
+                        <label class="label-text text-xs mb-1 block">Fichier .xlsx</label>
                         <input type="file" wire:model="importFile" accept=".xlsx,.xls"
                                class="file-input file-input-sm file-input-bordered w-52" />
                     </div>
@@ -236,9 +283,12 @@ new #[Layout('components.layouts.app')] class extends Component {
                         class="btn-primary btn-sm"
                         spinner="importStudents"
                         icon="o-arrow-up-tray"
+                        tooltip="Importer depuis un fichier Excel (format modèle)"
                     />
                 </div>
+                <span class="text-xs text-base-content/40 hidden sm:inline">— Utiliser le modèle ci-dessus. Les élèves existants (même matricule) seront mis à jour.</span>
             </div>
+
         </div>
     </div>
 
@@ -250,7 +300,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <div class="flex items-center gap-2.5">
                         <div class="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold shrink-0
                             {{ $student->gender === 'M' ? 'bg-blue-100 text-blue-700' : 'bg-pink-100 text-pink-700' }}">
-                            {{ strtoupper(substr($student->first_name, 0, 1)) }}
+                            {{ strtoupper(substr($student->full_name, 0, 1)) }}
                         </div>
                         <div>
                             <p class="font-semibold text-sm">{{ $student->full_name }}</p>
@@ -260,6 +310,11 @@ new #[Layout('components.layouts.app')] class extends Component {
                 @endscope
                 @scope('cell_birth_date', $student)
                     <span class="text-sm">{{ $student->birth_date->format('d/m/Y') }}</span>
+                @endscope
+                @scope('cell_age', $student)
+                    <span class="badge badge-ghost badge-sm font-semibold">
+                        {{ $student->birth_date->age }} ans
+                    </span>
                 @endscope
                 @scope('cell_gender', $student)
                     <span class="badge {{ $student->gender === 'M' ? 'badge-info' : 'badge-secondary' }} badge-sm font-medium">
@@ -297,15 +352,13 @@ new #[Layout('components.layouts.app')] class extends Component {
                     placeholder="INTEC-2026-0001"
                     icon="o-identification"
                     hint="Laissez vide pour générer automatiquement" />
-                <x-select label="Genre" wire:model="gender" :options="$genders" icon="o-user" />
-                <x-input label="Nom de famille" wire:model="last_name"
-                    placeholder="KOUASSI" icon="o-user" />
-                <x-input label="Prénom(s)" wire:model="first_name"
-                    placeholder="Amélie" icon="o-user" />
+                <x-choices label="Genre" wire:model="gender" :options="$genders" single clearable icon="o-user" />
+                <x-input label="Nom complet" wire:model="full_name"
+                    placeholder="KOUASSI Amélie" icon="o-user" class="col-span-2" />
                 <x-input label="Date de naissance" wire:model="birth_date"
                     type="date" icon="o-calendar" />
-                <x-select label="Classe" wire:model="classroom_id"
-                    :options="$classrooms" icon="o-building-library" />
+                <x-choices label="Classe" wire:model="classroom_id"
+                    :options="$classrooms" single clearable icon="o-building-library" />
             </div>
             <x-slot:actions>
                 <x-button label="Annuler" @click="$wire.showModal = false" />

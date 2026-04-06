@@ -20,7 +20,7 @@ Route::middleware(['auth'])->group(function () {
             ->name('index');
 
         Volt::route('/saisie', 'bulletin.saisie')
-            ->middleware('role:teacher|admin')
+            ->middleware('role:teacher|admin|direction')
             ->name('grade-form');
 
         Volt::route('/{bulletin}/workflow', 'bulletin.workflow')
@@ -34,6 +34,10 @@ Route::middleware(['auth'])->group(function () {
         Volt::route('/bilan-annuel', 'bulletin.annual')
             ->middleware('role:direction|admin')
             ->name('annual');
+
+        Volt::route('/modeles', 'bulletin.template-preview')
+            ->middleware('role:direction|admin')
+            ->name('template-preview');
 
         Volt::route('/carnet/{student}', 'bulletin.carnet')
             ->name('carnet');
@@ -61,6 +65,12 @@ Route::middleware(['auth'])->group(function () {
 
         Volt::route('/eleves', 'setup.eleves')
             ->name('students');
+
+        Volt::route('/seuils', 'setup.seuils')
+            ->name('seuils');
+
+        Volt::route('/enseignants', 'setup.enseignants')
+            ->name('teachers');
     });
 });
 

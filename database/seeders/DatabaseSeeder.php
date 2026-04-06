@@ -11,7 +11,7 @@ class DatabaseSeeder extends Seeder
         $this->call([
             RolesAndUsersSeeder::class,      // roles + AcademicYear + admin/staff accounts
             SchoolStructureSeeder::class,    // niveaux + subjects + competences (all levels)
-            FullSchoolSeeder::class,         // CE1 A classroom + 10 students + 3 subject teachers
+            FullSchoolSeeder::class,         // classrooms + 1 teacher each (no students)
         ]);
     }
 }

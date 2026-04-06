@@ -295,7 +295,9 @@ new #[Layout('components.layouts.print')] class extends Component {
     }
 }; ?>
 
-<div class="max-w-[21cm] mx-auto p-6 bg-white">
+@php $isPrescolaire = str_contains(strtoupper($student->classroom->niveau->code ?? ''), 'PRES'); @endphp
+
+<div class="max-w-[210mm] mx-auto bg-white @if(!$isPrescolaire) p-6 @else p-8 @endif">
 
     {{-- ── Print action bar (hidden when printing) ────────────────────────── --}}
     <div class="no-print flex items-center justify-between mb-5 p-3 bg-indigo-50 rounded-xl border border-indigo-100">
@@ -311,7 +313,61 @@ new #[Layout('components.layouts.print')] class extends Component {
 
     {{-- ===== PAGE 1 ===== --}}
 
-    {{-- Header --}}
+    @if($isPrescolaire)
+    {{-- ── PRÉSCOLAIRE HEADER — deux logos + titre centré ─────────────────── --}}
+    <div class="flex items-start justify-between mb-4">
+        {{-- Logo gauche (école) --}}
+        <div class="logo-container">
+            <img src="{{ asset('images/in tech.jpg') }}" alt="INTEC École Logo">
+        </div>
+
+        {{-- Centre --}}
+        <div class="flex-1 text-center px-4">
+            <div class="text-[11pt] font-bold uppercase tracking-wide">INTEC ÉCOLE</div>
+            <div class="text-[9pt] mt-0.5">
+                Année scolaire : {{ $yearLabel }}
+                &nbsp;&bull;&nbsp;
+                Classe : {{ $student->classroom->label ?? $student->classroom->code ?? '—' }}
+            </div>
+            <div class="text-[12pt] font-extrabold uppercase mt-2 border-b-2 border-black pb-1">
+                BILAN DES ACQUISITIONS
+            </div>
+            <div class="text-[10pt] font-bold mt-1">
+                {{ strtoupper($student->full_name) }}
+            </div>
+            <div class="text-[9pt] mt-0.5 text-gray-600">
+                Matricule : {{ $student->matricule }}
+                &nbsp;&bull;&nbsp;
+                Section : {{ $student->classroom->section ?? '—' }}
+            </div>
+        </div>
+
+        {{-- Logo droit (ministère / cachet officiel) --}}
+        <div class="w-24 h-24 border-2 border-black flex items-center justify-center bg-gray-50 flex-shrink-0">
+            <div class="text-center text-[7px] text-gray-400 leading-tight">Cachet<br>Officiel</div>
+        </div>
+    </div>
+
+    {{-- Info élève --}}
+    <table class="w-full border-collapse border border-black mb-3 text-[9px]">
+        <tr>
+            <td class="border border-black p-1.5 font-semibold w-[33%]">
+                <span class="text-gray-500">Enseignant(e) :</span>
+                {{ $student->classroom->teacher?->name ?? '—' }}
+            </td>
+            <td class="border border-black p-1.5 font-semibold w-[33%]">
+                <span class="text-gray-500">Date de naissance :</span>
+                {{ $student->birth_date?->format('d/m/Y') ?? '—' }}
+            </td>
+            <td class="border border-black p-1.5 font-semibold w-[34%]">
+                <span class="text-gray-500">Niveau :</span>
+                {{ $student->classroom->niveau->label ?? $student->classroom->niveau->code ?? '—' }}
+            </td>
+        </tr>
+    </table>
+
+    @else
+    {{-- ── PRIMAIRE / AUTRES HEADER — logo gauche, info centre, photo droite ─ --}}
     <div class="flex items-center justify-between mb-4 pb-3 border-b-2 border-black">
         <div class="logo-container">
             <img src="{{ asset('images/in tech.jpg') }}" alt="INTEC École Logo">
@@ -330,6 +386,7 @@ new #[Layout('components.layouts.print')] class extends Component {
             <div class="text-center text-[8px] text-gray-400">Photo<br>Élève</div>
         </div>
     </div>
+    @endif
 
     {{-- Subject tables --}}
     @foreach($subjects as $idx => $subject)

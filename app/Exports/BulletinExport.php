@@ -41,8 +41,7 @@ class BulletinExport implements FromCollection, WithHeadings, WithStyles, WithTi
             ->get()
             ->map(fn($bulletin) => [
                 'matricule'     => $bulletin->student->matricule,
-                'nom'           => $bulletin->student->last_name,
-                'prenom'        => $bulletin->student->first_name,
+                'nom_complet'   => $bulletin->student->full_name,
                 'classe'        => $bulletin->classroom->label,
                 'section'       => $bulletin->classroom->section,
                 'periode'       => 'P' . $bulletin->period,
@@ -58,8 +57,7 @@ class BulletinExport implements FromCollection, WithHeadings, WithStyles, WithTi
     {
         return [
             'Matricule',
-            'Nom',
-            'Prénom',
+            'Nom Complet',
             'Classe',
             'Section',
             'Période',

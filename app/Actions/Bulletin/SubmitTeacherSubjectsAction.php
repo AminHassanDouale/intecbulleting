@@ -21,8 +21,10 @@ class SubmitTeacherSubjectsAction
      */
     public function execute(Bulletin $bulletin, User $teacher): array
     {
-        // Guard: teacher must have subjects assigned
-        if (! $teacher->subjects()->exists()) {
+        $isDirection = $teacher->hasRole('direction') || $teacher->hasRole('admin');
+
+        // Guard: teacher must have subjects assigned (skipped for direction/admin)
+        if (! $isDirection && ! $teacher->subjects()->exists()) {
             return [
                 'success'          => false,
                 'fully_submitted'  => false,
@@ -50,8 +52,10 @@ class SubmitTeacherSubjectsAction
         $bulletin->load('teacherSubmissions', 'classroom.niveau');
         $progress = $bulletin->teacherSubmissionProgress();
 
-        // If ALL teachers have submitted → advance bulletin to SUBMITTED
-        if ($bulletin->allTeachersSubmitted()) {
+        // Direction/admin force-submits the bulletin immediately; teachers wait for all
+        $fullySubmitted = $isDirection || $bulletin->allTeachersSubmitted();
+
+        if ($fullySubmitted) {
             $bulletin->update([
                 'status'       => BulletinStatusEnum::SUBMITTED,
                 'submitted_by' => $teacher->id,
@@ -63,10 +67,12 @@ class SubmitTeacherSubjectsAction
                 $u->notify(new \App\Notifications\GradesSubmittedNotification($bulletin))
             );
 
+            $who = $isDirection ? 'Direction' : 'Tous les enseignants';
+
             return [
                 'success'         => true,
                 'fully_submitted' => true,
-                'message'         => 'Tous les enseignants ont soumis — bulletin transmis à la pédagogie.',
+                'message'         => "{$who} — bulletin transmis à la pédagogie.",
                 'progress'        => $progress,
             ];
         }

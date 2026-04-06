@@ -199,13 +199,13 @@ new #[Layout('components.layouts.app')] class extends Component {
         <x-form wire:submit="save" no-separator>
             <x-errors title="Veuillez corriger les erreurs." icon="o-face-frown" />
             <div class="grid grid-cols-2 gap-4">
-                <x-select label="Niveau" wire:model="niveau_id" :options="$niveaux" icon="o-academic-cap" />
-                <x-select label="Code classe" wire:model="code" :options="$classCodes" icon="o-tag" />
+                <x-choices label="Niveau" wire:model="niveau_id" :options="$niveaux" single clearable icon="o-academic-cap" />
+                <x-choices label="Code classe" wire:model="code" :options="$classCodes" single clearable icon="o-tag" />
                 <x-input label="Libellé" wire:model="label" placeholder="ex: CM1" icon="o-pencil" />
-                <x-select label="Section" wire:model="section" :options="$sections" icon="o-queue-list" />
-                <x-select label="Année scolaire" wire:model="academic_year_id" :options="$years" icon="o-calendar" />
-                <x-select label="Enseignant(e) titulaire" wire:model="teacher_id" :options="$teachers"
-                    placeholder="— Aucun —" icon="o-user" />
+                <x-choices label="Section" wire:model="section" :options="$sections" single clearable icon="o-queue-list" />
+                <x-choices label="Année scolaire" wire:model="academic_year_id" :options="$years" single clearable icon="o-calendar" />
+                <x-choices label="Enseignant(e) titulaire" wire:model="teacher_id" :options="$teachers"
+                    single clearable placeholder="— Aucun —" icon="o-user" />
             </div>
             <x-slot:actions>
                 <x-button label="Annuler" @click="$wire.showModal = false" />

@@ -210,7 +210,7 @@ class GradeSheetImport implements ToArray, WithStartRow
 
         foreach ($subjectRow as $val) {
             $trimmed = trim((string) $val);
-            if ($trimmed !== '' && !in_array(strtolower($trimmed), ['matricule', 'nom', 'prénom', 'prenom', 'commentaire'], true)) {
+            if ($trimmed !== '' && !in_array(strtolower($trimmed), ['matricule', 'nom complet', 'nom', 'prénom', 'prenom', 'commentaire'], true)) {
                 $currentSubject = $trimmed;
             }
             $subjectForCol[] = $currentSubject;
@@ -219,7 +219,7 @@ class GradeSheetImport implements ToArray, WithStartRow
         // Build column map: col index → "subjectname::competencecode"
         $this->columnMap = [];
 
-        for ($col = 3; $col < count($codeRow); $col++) {
+        for ($col = 2; $col < count($codeRow); $col++) {
             $code    = trim((string) ($codeRow[$col] ?? ''));
             $subject = $subjectForCol[$col] ?? null;
 

@@ -118,18 +118,18 @@ class PrimaireSeeder extends Seeder
         // ── 10 élèves répartis sur les 3 classes ─────────────────────────────
         $students = [
             // CM1 A (4 élèves)
-            ['first_name' => 'Kofi',     'last_name' => 'ASANTE',   'gender' => 'M', 'birth_date' => '2014-03-12', 'classroom' => 'prof.diallo@intec.edu'],
-            ['first_name' => 'Ama',      'last_name' => 'MENSAH',   'gender' => 'F', 'birth_date' => '2014-07-25', 'classroom' => 'prof.diallo@intec.edu'],
-            ['first_name' => 'Ibrahim',  'last_name' => 'COULIBALY', 'gender' => 'M', 'birth_date' => '2013-11-08', 'classroom' => 'prof.diallo@intec.edu'],
-            ['first_name' => 'Aissatou', 'last_name' => 'BARRY',    'gender' => 'F', 'birth_date' => '2014-01-30', 'classroom' => 'prof.diallo@intec.edu'],
+            ['full_name' => 'Kofi ASANTE',      'gender' => 'M', 'birth_date' => '2014-03-12', 'classroom' => 'prof.diallo@intec.edu'],
+            ['full_name' => 'Ama MENSAH',        'gender' => 'F', 'birth_date' => '2014-07-25', 'classroom' => 'prof.diallo@intec.edu'],
+            ['full_name' => 'Ibrahim COULIBALY', 'gender' => 'M', 'birth_date' => '2013-11-08', 'classroom' => 'prof.diallo@intec.edu'],
+            ['full_name' => 'Aissatou BARRY',    'gender' => 'F', 'birth_date' => '2014-01-30', 'classroom' => 'prof.diallo@intec.edu'],
             // CE2 B (3 élèves)
-            ['first_name' => 'Moussa',   'last_name' => 'TRAORÉ',   'gender' => 'M', 'birth_date' => '2015-05-19', 'classroom' => 'prof.bamba@intec.edu'],
-            ['first_name' => 'Mariam',   'last_name' => 'DIOMANDE',  'gender' => 'F', 'birth_date' => '2015-09-03', 'classroom' => 'prof.bamba@intec.edu'],
-            ['first_name' => 'Seydou',   'last_name' => 'OUATTARA', 'gender' => 'M', 'birth_date' => '2015-02-14', 'classroom' => 'prof.bamba@intec.edu'],
+            ['full_name' => 'Moussa TRAORÉ',    'gender' => 'M', 'birth_date' => '2015-05-19', 'classroom' => 'prof.bamba@intec.edu'],
+            ['full_name' => 'Mariam DIOMANDE',  'gender' => 'F', 'birth_date' => '2015-09-03', 'classroom' => 'prof.bamba@intec.edu'],
+            ['full_name' => 'Seydou OUATTARA',  'gender' => 'M', 'birth_date' => '2015-02-14', 'classroom' => 'prof.bamba@intec.edu'],
             // CP A (3 élèves)
-            ['first_name' => 'Adja',     'last_name' => 'CAMARA',   'gender' => 'F', 'birth_date' => '2017-06-22', 'classroom' => 'prof.kone@intec.edu'],
-            ['first_name' => 'Lamine',   'last_name' => 'SYLLA',    'gender' => 'M', 'birth_date' => '2017-08-10', 'classroom' => 'prof.kone@intec.edu'],
-            ['first_name' => 'Nafi',     'last_name' => 'KOUYATÉ',  'gender' => 'F', 'birth_date' => '2017-04-05', 'classroom' => 'prof.kone@intec.edu'],
+            ['full_name' => 'Adja CAMARA',      'gender' => 'F', 'birth_date' => '2017-06-22', 'classroom' => 'prof.kone@intec.edu'],
+            ['full_name' => 'Lamine SYLLA',     'gender' => 'M', 'birth_date' => '2017-08-10', 'classroom' => 'prof.kone@intec.edu'],
+            ['full_name' => 'Nafi KOUYATÉ',     'gender' => 'F', 'birth_date' => '2017-04-05', 'classroom' => 'prof.kone@intec.edu'],
         ];
 
         $index = 1;
@@ -140,8 +140,7 @@ class PrimaireSeeder extends Seeder
             Student::firstOrCreate(
                 ['matricule' => $matricule],
                 [
-                    'first_name'       => $s['first_name'],
-                    'last_name'        => $s['last_name'],
+                    'full_name'        => $s['full_name'],
                     'gender'           => $s['gender'],
                     'birth_date'       => $s['birth_date'],
                     'classroom_id'     => $classroom->id,

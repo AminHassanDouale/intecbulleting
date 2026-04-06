@@ -137,10 +137,11 @@ new #[Layout('components.layouts.app')] class extends Component {
                 clearable
                 class="flex-1"
             />
-            <x-select
+            <x-choices
                 wire:model.live="filterSubject"
                 :options="$subjectsFilter"
-                class="select-sm"
+                single clearable
+                placeholder="Matière…"
             />
         </div>
     </div>
@@ -196,7 +197,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         <x-form wire:submit="save" no-separator>
             <x-errors title="Veuillez corriger les erreurs." icon="o-face-frown" />
             <div class="space-y-3">
-                <x-select label="Matière" wire:model="subject_id" :options="$subjects" icon="o-book-open" />
+                <x-choices label="Matière" wire:model="subject_id" :options="$subjects" single clearable icon="o-book-open" />
                 <div class="grid grid-cols-2 gap-3">
                     <x-input label="Code" wire:model="code" placeholder="CB1" icon="o-tag"
                         hint="Code court de la compétence" />
@@ -208,7 +209,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     placeholder="Résoudre une situation problème faisant intervenir…"
                     hint="Décrivez clairement la compétence attendue" />
                 <div class="grid grid-cols-2 gap-3">
-                    <x-select label="Période spécifique" wire:model="period" :options="$periods" icon="o-calendar" />
+                    <x-choices label="Période spécifique" wire:model="period" :options="$periods" single clearable icon="o-calendar" />
                     <x-input label="Ordre d'affichage" wire:model="order" type="number" min="0" icon="o-arrows-up-down" />
                 </div>
             </div>

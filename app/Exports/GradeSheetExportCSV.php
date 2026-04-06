@@ -127,7 +127,7 @@ class GradeSheetExportCSV
 
         // ── Row 2: subject names (one per competence column, blank for repeats)
         // e.g.  "# matiere" | "" | "" | "Mathématiques" | "" | "" | "Français" | ...
-        $subjectRow = ['# matiere', '', ''];
+        $subjectRow = ['# matiere', ''];
         $lastSubjectId = null;
         foreach ($this->competences as $c) {
             // Print subject name only on its first competence column, blank the rest
@@ -141,7 +141,7 @@ class GradeSheetExportCSV
 
         // ── Row 3: competence names ────────────────────────────────────────────
         // e.g.  "# competence" | "" | "" | "Calcul mental" | "Géométrie" | ...
-        $competenceRow = ['# competence', '', ''];
+        $competenceRow = ['# competence', ''];
         foreach ($this->competences as $c) {
             $competenceRow[] = $c->name;
         }
@@ -149,7 +149,7 @@ class GradeSheetExportCSV
         $rows[] = $competenceRow;
 
         // ── Row 4: scale / max-score hint ─────────────────────────────────────
-        $maxRow = ['# max', '', ''];
+        $maxRow = ['# max', ''];
         foreach ($this->competences as $c) {
             $maxRow[] = $c->subject->scale_type === 'competence'
                 ? 'A/EVA/NA'
@@ -159,7 +159,7 @@ class GradeSheetExportCSV
         $rows[] = $maxRow;
 
         // ── Row 5: column headers (this is what the importer detects) ─────────
-        $header = ['matricule', 'nom', 'prenom'];
+        $header = ['matricule', 'nom_complet'];
         foreach ($this->competences as $c) {
             $header[] = $c->code;
         }
@@ -168,13 +168,12 @@ class GradeSheetExportCSV
 
         // ── Rows 6+: student data ─────────────────────────────────────────────
         $students = Student::where('classroom_id', $this->classroomId)
-            ->orderBy('last_name')
-            ->orderBy('first_name')
+            ->orderBy('full_name')
             ->get();
 
         if ($students->isEmpty()) {
             $rows[] = array_merge(
-                ['---', 'Aucun élève', 'dans cette classe'],
+                ['---', 'Aucun élève dans cette classe'],
                 array_fill(0, count($this->competences) + 1, '')
             );
             return $rows;
@@ -188,9 +187,8 @@ class GradeSheetExportCSV
                 ->first();
 
             $row = [
-                $student->matricule  ?? '',
-                $student->last_name  ?? '',
-                $student->first_name ?? '',
+                $student->matricule ?? '',
+                $student->full_name ?? '',
             ];
 
             foreach ($this->competences as $c) {

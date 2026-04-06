@@ -18,6 +18,8 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $filterPeriod    = '';
     public string $filterClassCode = '';
     public string $filterSection   = '';
+    public string $filterNiveau    = '';   // '' | 'PRESCOLAIRE' | 'PRIMAIRE'
+    public bool   $showFilters     = false;
     public array  $selectedIds     = [];
     public bool   $selectAll       = false;
 
@@ -60,6 +62,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     public function updatedFilterStatus(): void    { $this->resetPage(); }
     public function updatedFilterPeriod(): void    { $this->resetPage(); }
     public function updatedFilterSection(): void   { $this->resetPage(); }
+    public function updatedFilterNiveau(): void    { $this->selectedIds = []; $this->resetPage(); }
 
     public function updatedFilterClassCode(): void
     {
@@ -88,12 +91,11 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     protected function getBulletins()
     {
-        $query = Bulletin::with(['student', 'classroom', 'academicYear'])
+        $query = Bulletin::with(['student', 'classroom.niveau', 'academicYear'])
             ->when($this->search, fn($q) =>
                 $q->whereHas('student', fn($sq) =>
-                    $sq->where('first_name', 'like', "%{$this->search}%")
-                       ->orWhere('last_name',  'like', "%{$this->search}%")
-                       ->orWhere('matricule',  'like', "%{$this->search}%")
+                    $sq->where('full_name', 'like', "%{$this->search}%")
+                       ->orWhere('matricule', 'like', "%{$this->search}%")
                 )
             )
             ->when($this->filterStatus,    fn($q) => $q->where('status', $this->filterStatus))
@@ -103,6 +105,9 @@ new #[Layout('components.layouts.app')] class extends Component {
             )
             ->when($this->filterSection, fn($q) =>
                 $q->whereHas('classroom', fn($cq) => $cq->where('section', $this->filterSection))
+            )
+            ->when($this->filterNiveau, fn($q) =>
+                $q->whereHas('classroom.niveau', fn($nq) => $nq->where('code', $this->filterNiveau))
             );
 
         if (auth()->user()->hasRole('teacher')) {
@@ -127,17 +132,28 @@ new #[Layout('components.layouts.app')] class extends Component {
             return;
         }
 
-        $bulletin->update([
-            'status'       => BulletinStatusEnum::SUBMITTED,
-            'submitted_by' => auth()->id(),
-            'submitted_at' => now(),
-        ]);
+        // Go through the action so multi-teacher tracking is respected:
+        // 1-teacher class  → submits → auto-advances to pédagogie immediately
+        // N-teacher class  → waits for ALL teachers before advancing
+        $result = app(\App\Actions\Bulletin\SubmitTeacherSubjectsAction::class)
+            ->execute($bulletin, auth()->user());
 
-        \App\Models\User::role('pedagogie')->each(fn($u) =>
-            $u->notify(new \App\Notifications\GradesSubmittedNotification($bulletin))
-        );
+        if (! $result['success']) {
+            $this->error('Erreur', $result['message'], icon: 'o-x-circle', position: 'toast-top toast-end');
+            return;
+        }
 
-        $this->success('Bulletin soumis !', 'Transmis à la pédagogie pour validation.', icon: 'o-paper-airplane', position: 'toast-top toast-end');
+        if ($result['fully_submitted']) {
+            $this->success('Bulletin soumis !', 'Transmis à la pédagogie pour validation.', icon: 'o-paper-airplane', position: 'toast-top toast-end');
+        } else {
+            $remaining = ($result['progress']['total'] ?? 0) - ($result['progress']['submitted'] ?? 0);
+            $this->warning(
+                'Notes enregistrées.',
+                "En attente de {$remaining} autre(s) enseignant(s) avant envoi à la pédagogie.",
+                icon: 'o-clock',
+                position: 'toast-top toast-end'
+            );
+        }
     }
 
     public function bulkSubmit(): void
@@ -147,33 +163,48 @@ new #[Layout('components.layouts.app')] class extends Component {
             return;
         }
 
-        $submitted = 0;
+        $action         = app(\App\Actions\Bulletin\SubmitTeacherSubjectsAction::class);
+        $fullySubmitted = 0;
+        $partial        = 0;
+        $errors         = 0;
 
         foreach ($this->selectedIds as $id) {
             $bulletin = Bulletin::find((int) $id);
-            if ($bulletin && $bulletin->isEditable()) {
-                $bulletin->update([
-                    'status'       => BulletinStatusEnum::SUBMITTED,
-                    'submitted_by' => auth()->id(),
-                    'submitted_at' => now(),
-                ]);
-                $submitted++;
+            if (! $bulletin || ! $bulletin->isEditable()) {
+                $errors++;
+                continue;
             }
-        }
 
-        if ($submitted > 0) {
-            \App\Models\User::role('pedagogie')->each(fn($u) =>
-                $u->notify(new \App\Notifications\GradesSubmittedNotification(
-                    Bulletin::find((int) $this->selectedIds[0])
-                ))
-            );
+            $result = $action->execute($bulletin, auth()->user());
+
+            if (! $result['success']) {
+                $errors++;
+            } elseif ($result['fully_submitted']) {
+                $fullySubmitted++;
+            } else {
+                $partial++;
+            }
         }
 
         $this->selectedIds = [];
 
-        $submitted > 0
-            ? $this->success("{$submitted} bulletin(s) soumis !", 'Transmis à la pédagogie.', icon: 'o-paper-airplane', position: 'toast-top toast-end')
-            : $this->warning('Aucun bulletin soumis.', 'Les bulletins sélectionnés ne sont pas modifiables.', icon: 'o-exclamation-triangle', position: 'toast-top toast-end');
+        if ($fullySubmitted > 0) {
+            $this->success(
+                "{$fullySubmitted} bulletin(s) transmis à la pédagogie !",
+                $partial > 0 ? "{$partial} en attente d'autres enseignants." : '',
+                icon: 'o-paper-airplane',
+                position: 'toast-top toast-end'
+            );
+        } elseif ($partial > 0) {
+            $this->warning(
+                "{$partial} note(s) enregistrée(s).",
+                'En attente des autres enseignants avant transmission.',
+                icon: 'o-clock',
+                position: 'toast-top toast-end'
+            );
+        } else {
+            $this->warning('Aucun bulletin soumis.', 'Les bulletins sélectionnés ne sont pas modifiables.', icon: 'o-exclamation-triangle', position: 'toast-top toast-end');
+        }
     }
 
     public function bulkApprove(): void
@@ -531,8 +562,16 @@ new #[Layout('components.layouts.app')] class extends Component {
             );
         }
 
+        // Niveau tab counts
+        $niveauCounts = [
+            ''           => (clone $base)->count(),
+            'PRESCOLAIRE'=> (clone $base)->whereHas('classroom.niveau', fn($q) => $q->where('code', 'PRESCOLAIRE'))->count(),
+            'PRIMAIRE'   => (clone $base)->whereHas('classroom.niveau', fn($q) => $q->where('code', 'PRIMAIRE'))->count(),
+        ];
+
         return [
             'bulletins'      => $this->getBulletins(),
+            'niveauCounts'   => $niveauCounts,
             'statDraft'      => (clone $base)->where('status', BulletinStatusEnum::DRAFT)->count(),
             'statSubmitted'  => (clone $base)->where('status', BulletinStatusEnum::SUBMITTED)->count(),
             'statPending'    => (clone $base)->whereIn('status', [
@@ -607,6 +646,27 @@ new #[Layout('components.layouts.app')] class extends Component {
         </div>
     </div>
 
+    {{-- Niveau tabs --}}
+    <div class="flex gap-1 p-1 bg-base-200 rounded-xl w-fit">
+        @foreach([
+            [''            , 'Tous',         '📋', $niveauCounts['']],
+            ['PRESCOLAIRE' , 'Préscolaire',   '🌱', $niveauCounts['PRESCOLAIRE']],
+            ['PRIMAIRE'    , 'Primaire',      '📚', $niveauCounts['PRIMAIRE']],
+        ] as [$val, $label, $icon, $count])
+        <button
+            wire:click="$set('filterNiveau', '{{ $val }}')"
+            class="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-all
+                {{ $filterNiveau === $val
+                    ? 'bg-white shadow text-primary font-semibold'
+                    : 'text-base-content/60 hover:text-base-content hover:bg-white/50' }}"
+        >
+            <span>{{ $icon }}</span>
+            <span>{{ $label }}</span>
+            <span class="badge badge-xs {{ $filterNiveau === $val ? 'badge-primary' : 'badge-ghost' }} font-bold">{{ $count }}</span>
+        </button>
+        @endforeach
+    </div>
+
     {{-- Stat cards --}}
     <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         @foreach([
@@ -628,41 +688,43 @@ new #[Layout('components.layouts.app')] class extends Component {
     </div>
 
     {{-- Filters --}}
-    <div class="card bg-base-100 shadow-sm">
-        <div class="card-body py-3 px-4 space-y-3">
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <x-input
-                    wire:model.live.debounce.300="search"
-                    placeholder="Rechercher un élève…"
-                    icon="o-magnifying-glass"
-                    clearable
-                />
-                <x-select
-                    wire:model.live="filterStatus"
-                    :options="$statusOptions"
-                    placeholder="Tous les statuts"
-                />
-            </div>
-            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <x-select
-                    wire:model.live="filterPeriod"
-                    :options="$periodOptions"
-                    placeholder="Tous les trimestres"
-                />
-                <x-select
-                    wire:model.live="filterClassCode"
-                    :options="$classCodes"
-                    placeholder="Toutes les classes"
-                />
-                <x-select
-                    wire:model.live="filterSection"
-                    :options="$sections"
-                    placeholder="{{ $filterClassCode ? 'Toutes les sections' : '— Choisir une classe —' }}"
-                    :disabled="!$filterClassCode"
-                />
-            </div>
+    {{-- Search + filter button --}}
+    <div class="flex gap-2">
+        <x-input
+            wire:model.live.debounce.300="search"
+            placeholder="Rechercher un élève…"
+            icon="o-magnifying-glass"
+            clearable
+            class="flex-1"
+        />
+        <div class="relative">
+            <x-button icon="o-funnel" @click="$wire.showFilters = true" class="btn-outline" tooltip="Filtres" />
+            @php $activeFilters = ($filterStatus ? 1 : 0) + ($filterPeriod ? 1 : 0) + ($filterClassCode ? 1 : 0) + ($filterSection ? 1 : 0); @endphp
+            @if($activeFilters)
+            <span class="absolute -top-1.5 -right-1.5 badge badge-warning badge-xs font-bold">{{ $activeFilters }}</span>
+            @endif
         </div>
     </div>
+
+    {{-- Filter drawer --}}
+    <x-filter-drawer model="showFilters" title="Filtres" subtitle="Affiner la liste des bulletins">
+        <x-choices label="Statut" wire:model.live="filterStatus" :options="$statusOptions" single clearable icon="o-flag" placeholder="Tous les statuts" />
+        <x-choices label="Trimestre" wire:model.live="filterPeriod" :options="$periodOptions" single clearable icon="o-clock" placeholder="Tous les trimestres" />
+        <x-choices label="Classe" wire:model.live="filterClassCode" :options="$classCodes" single clearable icon="o-building-library" placeholder="Toutes les classes" />
+        <x-choices
+            label="Section"
+            wire:model.live="filterSection"
+            :options="$sections"
+            single clearable
+            icon="o-tag"
+            placeholder="{{ $filterClassCode ? 'Toutes les sections' : '— Choisir une classe —' }}"
+            :disabled="!$filterClassCode"
+        />
+        <x-slot:actions>
+            <x-button label="Réinitialiser" wire:click="$set('filterStatus',''); $set('filterPeriod',''); $set('filterClassCode',''); $set('filterSection',''); $set('filterNiveau','')" icon="o-arrow-path" />
+            <x-button label="Fermer" @click="$wire.showFilters = false" class="btn-primary" icon="o-check" />
+        </x-slot:actions>
+    </x-filter-drawer>
 
     {{-- Bulk action bar --}}
     @if(!empty($selectedIds))
@@ -724,7 +786,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 <div class="flex items-center gap-2.5">
                                     <div class="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0
                                         {{ $bulletin->student->gender === 'M' ? 'bg-blue-100 text-blue-700' : 'bg-pink-100 text-pink-700' }}">
-                                        {{ strtoupper(substr($bulletin->student->first_name, 0, 1)) }}
+                                        {{ strtoupper(substr($bulletin->student->full_name, 0, 1)) }}
                                     </div>
                                     <div>
                                         <p class="font-semibold text-sm">{{ $bulletin->student->full_name }}</p>
@@ -733,8 +795,17 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 </div>
                             </td>
                             <td>
-                                <span class="font-medium">{{ $bulletin->classroom->code }}</span>
-                                <span class="text-base-content/40 text-xs ml-1">§{{ $bulletin->classroom->section }}</span>
+                                <div class="flex flex-col gap-0.5">
+                                    <span class="font-medium">
+                                        {{ $bulletin->classroom->label ?? $bulletin->classroom->code }}
+                                        <span class="text-base-content/40 text-xs">§{{ $bulletin->classroom->section }}</span>
+                                    </span>
+                                    @if($bulletin->classroom->niveau)
+                                    <span class="badge badge-xs {{ $bulletin->classroom->niveau->code === 'PRESCOLAIRE' ? 'badge-warning' : 'badge-info' }} w-fit">
+                                        {{ $bulletin->classroom->niveau->code === 'PRESCOLAIRE' ? '🌱 Préscolaire' : '📚 Primaire' }}
+                                    </span>
+                                    @endif
+                                </div>
                             </td>
                             <td>
                                 <span class="badge badge-ghost badge-sm">{{ \App\Enums\PeriodEnum::from($bulletin->period)->label() }}</span>
@@ -837,7 +908,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         <div class="rounded-xl bg-linear-to-r from-indigo-600 to-violet-700 text-white px-4 py-3 flex items-center justify-between gap-3 mb-4">
             <div class="flex items-center gap-3">
                 <div class="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center text-lg font-bold shrink-0">
-                    {{ strtoupper(substr($pb->student->first_name, 0, 1)) }}
+                    {{ strtoupper(substr($pb->student->full_name, 0, 1)) }}
                 </div>
                 <div>
                     <p class="font-bold text-sm leading-tight">{{ $pb->student->full_name }}</p>
