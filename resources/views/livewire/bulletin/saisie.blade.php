@@ -7,7 +7,6 @@ use App\Enums\BulletinStatusEnum;
 use App\Enums\CompetenceStatusEnum;
 use App\Enums\PeriodEnum;
 use App\Exports\GradeSheetExport;
-use App\Exports\GradeSheetDirectorExport;
 use App\Imports\GradeSheetImport;
 use App\Models\AcademicYear;
 use App\Models\Bulletin;
@@ -239,24 +238,15 @@ new #[Layout('components.layouts.app')] class extends Component {
             return null;
         }
 
-        $isDirection = auth()->user()->hasAnyRole(['admin', 'direction']);
-
-        if ($isDirection) {
-            $export = new GradeSheetDirectorExport(
-                $this->selectedClassroom,
-                $this->selectedPeriod,
-                $this->selectedYear,
-                $this->selectedNiveau,
-            );
-        } else {
-            $export = new GradeSheetExport(
-                $this->selectedClassroom,
-                $this->selectedPeriod,
-                $this->selectedYear,
-                $this->selectedNiveau,
-                $this->getTeacherIdForExportImport()
-            );
-        }
+        // Direction/admin get teacherId=null → all subjects on one sheet.
+        // Teachers get their own teacherId → only their subjects.
+        $export = new GradeSheetExport(
+            $this->selectedClassroom,
+            $this->selectedPeriod,
+            $this->selectedYear,
+            $this->selectedNiveau,
+            $this->getTeacherIdForExportImport()
+        );
 
         return Excel::download($export, $export->getFilename());
     }

@@ -6,6 +6,13 @@
     <title>{{ config('app.name', 'INTEC École') }}</title>
     <link rel="icon" type="image/jpeg" href="{{ asset('images/in tech.jpg') }}">
     <link rel="shortcut icon" type="image/jpeg" href="{{ asset('images/in tech.jpg') }}">
+    {{-- Apply saved theme before CSS loads to prevent flash --}}
+    <script>
+        (function () {
+            var t = localStorage.getItem('intec-theme') || 'light';
+            document.documentElement.setAttribute('data-theme', t);
+        })();
+    </script>
     @vite(['resources/css/app.css', 'resources/js/app.js'])
     @livewireStyles
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -77,6 +84,38 @@
         [class*="toast"] progress.progress { opacity:0.35; }
         [class*="toast"] progress.progress::-webkit-progress-value { background:#fff; }
         [class*="toast"] progress.progress::-moz-progress-bar { background:#fff; }
+
+        /* ── Dark mode overrides (hardcoded colours that DaisyUI won't touch) ── */
+        [data-theme="dark"] body                  { background:#0f172a; }
+        [data-theme="dark"] header                { background:#1e293b !important; border-color:#334155 !important; }
+        [data-theme="dark"] footer                { background:#1e293b !important; border-color:#334155 !important; color:#475569; }
+        [data-theme="dark"] aside                 { background:#1e293b !important; border-color:#334155 !important; }
+        [data-theme="dark"] aside .border-b,
+        [data-theme="dark"] aside .border-t       { border-color:#334155 !important; }
+
+        [data-theme="dark"] .nav-section          { color:#475569; }
+        [data-theme="dark"] .nav-link             { color:#94a3b8; }
+        [data-theme="dark"] .nav-link:hover       { background:#0f172a; color:#e2e8f0; }
+        [data-theme="dark"] .nav-link.active      { background:#1e3a8a; color:#93c5fd; font-weight:600; }
+        [data-theme="dark"] .nav-link.active .nav-icon { background:#1d4ed8; }
+        [data-theme="dark"] aside .bg-slate-50    { background:#0f172a !important; }
+        [data-theme="dark"] aside .text-slate-700 { color:#cbd5e1 !important; }
+        [data-theme="dark"] aside .text-slate-400 { color:#64748b !important; }
+
+        [data-theme="dark"] .dropdown-content.bg-white { background:#1e293b !important; border-color:#334155 !important; }
+        [data-theme="dark"] .dropdown-content .border-b,
+        [data-theme="dark"] .dropdown-content .border-slate-100 { border-color:#334155 !important; }
+        [data-theme="dark"] .dropdown-content .hover\:bg-slate-50:hover { background:#0f172a !important; }
+        [data-theme="dark"] .dropdown-content .bg-slate-50 { background:#0f172a !important; }
+        [data-theme="dark"] .dropdown-content .text-slate-700,
+        [data-theme="dark"] .dropdown-content .text-slate-800 { color:#e2e8f0 !important; }
+        [data-theme="dark"] .dropdown-content .text-slate-400,
+        [data-theme="dark"] .dropdown-content .text-slate-500 { color:#64748b !important; }
+        [data-theme="dark"] .dropdown-content .text-slate-200 { color:#334155 !important; }
+        [data-theme="dark"] .dropdown-content .hover\:bg-red-50:hover { background:#450a0a !important; }
+        [data-theme="dark"] .w-px.bg-slate-200   { background:#334155; }
+        [data-theme="dark"] .text-slate-500       { color:#64748b; }
+        [data-theme="dark"] header .hover\:bg-slate-100:hover { background:#334155 !important; }
     </style>
 </head>
 <body class="min-h-screen bg-slate-100 font-sans antialiased">
@@ -149,6 +188,21 @@
                         </div>
                     </div>
                 </div>
+
+                {{-- Theme toggle --}}
+                <button id="theme-toggle"
+                        onclick="toggleTheme()"
+                        title="Basculer thème clair / sombre"
+                        class="btn btn-ghost btn-square btn-sm text-slate-500 hover:bg-slate-100">
+                    {{-- Moon: shown in light mode --}}
+                    <svg id="icon-moon" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M21 12.79A9 9 0 1111.21 3a7 7 0 009.79 9.79z"/>
+                    </svg>
+                    {{-- Sun: shown in dark mode --}}
+                    <svg id="icon-sun" class="h-5 w-5 hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v1m0 16v1m8.66-9H21M3 12H2m15.07-6.07-.71.71M6.64 17.36l-.71.71M17.36 17.36l.71.71M6.64 6.64l-.71-.71M12 5a7 7 0 100 14A7 7 0 0012 5z"/>
+                    </svg>
+                </button>
 
                 {{-- Divider --}}
                 <div class="w-px h-6 bg-slate-200"></div>
@@ -369,6 +423,37 @@
         const toggle = document.getElementById('sidebar-drawer');
         if (toggle && window.innerWidth < 1024) toggle.checked = false;
     }
+
+    function toggleTheme() {
+        var html    = document.documentElement;
+        var current = html.getAttribute('data-theme') || 'light';
+        var next    = current === 'light' ? 'dark' : 'light';
+        html.setAttribute('data-theme', next);
+        localStorage.setItem('intec-theme', next);
+        applyThemeIcons(next);
+    }
+
+    function applyThemeIcons(theme) {
+        var moon = document.getElementById('icon-moon');
+        var sun  = document.getElementById('icon-sun');
+        if (!moon || !sun) return;
+        if (theme === 'dark') {
+            moon.classList.add('hidden');
+            sun.classList.remove('hidden');
+        } else {
+            sun.classList.add('hidden');
+            moon.classList.remove('hidden');
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+        applyThemeIcons(localStorage.getItem('intec-theme') || 'light');
+    });
+
+    // Re-apply icons after Livewire navigates (SPA mode)
+    document.addEventListener('livewire:navigated', function () {
+        applyThemeIcons(localStorage.getItem('intec-theme') || 'light');
+    });
 </script>
 
 @livewireScripts
