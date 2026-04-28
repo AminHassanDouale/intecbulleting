@@ -321,6 +321,15 @@
                     <span class="nav-icon {{ request()->routeIs('setup.teachers') ? 'bg-blue-100' : '' }}">🧑‍🏫</span>
                     Enseignants
                 </a>
+                <a href="{{ route('setup.pre-inscriptions') }}" wire:navigate onclick="closeSidebar()"
+                   class="nav-link {{ request()->routeIs('setup.pre-inscriptions') ? 'active' : '' }}">
+                    <span class="nav-icon {{ request()->routeIs('setup.pre-inscriptions') ? 'bg-blue-100' : '' }}">📝</span>
+                    <span class="flex-1 truncate">Pré-inscriptions</span>
+                    @php $piCount = \App\Models\PreInscription::where('status','pending')->count(); @endphp
+                    @if($piCount > 0)
+                    <span class="badge badge-xs bg-orange-500 text-white border-0 shrink-0">{{ $piCount }}</span>
+                    @endif
+                </a>
                 @endrole
 
             </nav>

@@ -4,8 +4,11 @@ use App\Http\Controllers\BulletinDownloadController;
 use Illuminate\Support\Facades\Route;
 use Livewire\Volt\Volt;
 
-// Redirection racine
-Route::redirect('/', '/tableau-de-bord');
+// ─── Racine → login ───────────────────────────────────────────────────────────
+Route::redirect('/', '/connexion');
+
+// Redirection tableau de bord (pour les utilisateurs connectés)
+Route::redirect('/tableau-de-bord-redirect', '/tableau-de-bord');
 
 Route::middleware(['auth'])->group(function () {
 
@@ -71,6 +74,9 @@ Route::middleware(['auth'])->group(function () {
 
         Volt::route('/enseignants', 'setup.enseignants')
             ->name('teachers');
+
+        Volt::route('/pre-inscriptions', 'setup.pre-inscriptions')
+            ->name('pre-inscriptions');
     });
 });
 

@@ -86,12 +86,17 @@ class Bulletin extends Model implements HasMedia
     }
 
     /**
-     * Can this teacher still edit grades?
-     * - Always yes if bulletin is REJECTED (reset)
-     * - Yes if DRAFT and teacher hasn't submitted yet
+     * Can this user still edit grades?
+     * - Direction/admin: yes unless bulletin is approved or published
+     * - Teacher: yes if DRAFT and not yet submitted, or REJECTED
      */
     public function canTeacherEdit(int $userId): bool
     {
+        $user = \App\Models\User::find($userId);
+        if ($user?->hasAnyRole(['admin', 'direction'])) {
+            return ! in_array($this->status->value, ['approved', 'published']);
+        }
+
         if ($this->status === BulletinStatusEnum::REJECTED) {
             return true;
         }

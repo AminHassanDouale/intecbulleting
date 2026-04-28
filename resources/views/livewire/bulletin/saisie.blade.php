@@ -7,6 +7,7 @@ use App\Enums\BulletinStatusEnum;
 use App\Enums\CompetenceStatusEnum;
 use App\Enums\PeriodEnum;
 use App\Exports\GradeSheetExport;
+use App\Exports\GradeSheetDirectorExport;
 use App\Imports\GradeSheetImport;
 use App\Models\AcademicYear;
 use App\Models\Bulletin;
@@ -121,16 +122,25 @@ new #[Layout('components.layouts.app')] class extends Component {
     {
         if (! $this->bulletinId) return;
 
-        $bulletin = Bulletin::findOrFail($this->bulletinId);
+        $bulletin    = Bulletin::findOrFail($this->bulletinId);
+        $isDirection = auth()->user()->hasAnyRole(['admin', 'direction']);
 
         if (! $bulletin->canTeacherEdit(auth()->id())) {
-            $this->error('Lecture seule.', 'Vos notes ont déjà été soumises.', icon: 'o-lock-closed', position: 'toast-top toast-end');
+            $this->error('Lecture seule.', 'Ce bulletin est déjà validé.', icon: 'o-lock-closed', position: 'toast-top toast-end');
             return;
         }
 
         app(SaveGradeAction::class)->execute($bulletin, $this->grades);
         if ($this->teacherComment) {
             $bulletin->update(['teacher_comment' => $this->teacherComment]);
+        }
+
+        // Direction/admin: just save — do NOT auto-submit to workflow.
+        // Use "Tout soumettre" button when ready to forward to pédagogie.
+        if ($isDirection) {
+            $this->success('Notes enregistrées.', icon: 'o-check-circle', position: 'toast-top toast-end');
+            $this->loadOrCreateBulletin($this->selectedStudent);
+            return;
         }
 
         $result = app(SubmitTeacherSubjectsAction::class)->execute($bulletin, auth()->user());
@@ -219,7 +229,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         return $this->shouldFilterByTeacher() ? auth()->id() : null;
     }
 
-    // ── Excel export (unchanged) ──────────────────────────────────────────────
+    // ── Excel export ──────────────────────────────────────────────────────────
 
     #[Renderless]
     public function exportGrades(): mixed
@@ -229,13 +239,24 @@ new #[Layout('components.layouts.app')] class extends Component {
             return null;
         }
 
-        $export = new GradeSheetExport(
-            $this->selectedClassroom,
-            $this->selectedPeriod,
-            $this->selectedYear,
-            $this->selectedNiveau,
-            $this->getTeacherIdForExportImport()
-        );
+        $isDirection = auth()->user()->hasAnyRole(['admin', 'direction']);
+
+        if ($isDirection) {
+            $export = new GradeSheetDirectorExport(
+                $this->selectedClassroom,
+                $this->selectedPeriod,
+                $this->selectedYear,
+                $this->selectedNiveau,
+            );
+        } else {
+            $export = new GradeSheetExport(
+                $this->selectedClassroom,
+                $this->selectedPeriod,
+                $this->selectedYear,
+                $this->selectedNiveau,
+                $this->getTeacherIdForExportImport()
+            );
+        }
 
         return Excel::download($export, $export->getFilename());
     }
@@ -475,14 +496,16 @@ new #[Layout('components.layouts.app')] class extends Component {
                     $s->t2 = $bulletins['T2'] ?? null;
                     $s->t3 = $bulletins['T3'] ?? null;
 
-                    $current             = $bulletins[$period] ?? null;
-                    $s->current_bulletin = $current;
-                    $s->teacher_submitted = $current?->isTeacherSubmitted($userId) ?? false;
+                    $current              = $bulletins[$period] ?? null;
+                    $s->current_bulletin  = $current;
+                    $s->teacher_submitted = (! auth()->user()->hasAnyRole(['admin', 'direction']))
+                        && ($current?->isTeacherSubmitted($userId) ?? false);
 
                     return $s;
                 });
         }
 
+        $isDirection      = auth()->user()->hasAnyRole(['admin', 'direction']);
         $bulletin         = null;
         $canEdit          = false;
         $teacherSubmitted = false;
@@ -504,7 +527,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                 $bulletin = Bulletin::with(['teacherSubmissions.teacher', 'approvals'])->find($this->bulletinId);
                 if ($bulletin) {
                     $canEdit          = $bulletin->canTeacherEdit(auth()->id());
-                    $teacherSubmitted = $bulletin->isTeacherSubmitted(auth()->id());
+                    // Direction never enters the "submitted" read-only state — they can always re-edit
+                    $teacherSubmitted = $isDirection ? false : $bulletin->isTeacherSubmitted(auth()->id());
                     $progress         = $bulletin->teacherSubmissionProgress();
                 }
             }

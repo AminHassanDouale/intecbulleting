@@ -382,8 +382,14 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
 
     public function title(): string
     {
+        if ($this->teacherId) {
+            $name  = \App\Models\User::find($this->teacherId)?->name ?? 'Ens.';
+            $short = mb_substr(trim(explode(' ', $name)[0]), 0, 14);
+            return substr("{$short} - {$this->period}", 0, 31);
+        }
+
         $classroom = Classroom::find($this->classroomId);
-        return substr("Notes {$classroom?->label} {$this->period}", 0, 31);
+        return substr("Toutes matières - {$this->period}", 0, 31);
     }
 
     public function getFilename(): string
