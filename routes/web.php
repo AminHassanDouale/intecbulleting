@@ -57,6 +57,12 @@ Route::middleware(['auth'])->group(function () {
     // ─── Configuration ───────────────────────────────────────────────────────
     Route::prefix('configuration')->name('setup.')->middleware('role:admin|direction')->group(function () {
 
+        Volt::route('/annees', 'setup.annees')
+            ->name('annees');
+
+        Volt::route('/niveaux', 'setup.niveaux')
+            ->name('niveaux');
+
         Volt::route('/classes', 'setup.classes')
             ->name('classrooms');
 
@@ -65,6 +71,8 @@ Route::middleware(['auth'])->group(function () {
 
         Volt::route('/competences', 'setup.competences')
             ->name('competences');
+
+        // Note: programme also accessible to teachers — separate middleware below
 
         Volt::route('/eleves', 'setup.eleves')
             ->name('students');
@@ -75,9 +83,25 @@ Route::middleware(['auth'])->group(function () {
         Volt::route('/enseignants', 'setup.enseignants')
             ->name('teachers');
 
-        Volt::route('/pre-inscriptions', 'setup.pre-inscriptions')
-            ->name('pre-inscriptions');
+        Volt::route('/donnees', 'setup.donnees')
+            ->name('donnees');
+
     });
+
+    // ─── Programme (direction + enseignants) ─────────────────────────────────
+    Volt::route('/configuration/programme', 'setup.programme')
+        ->middleware('role:admin|direction|teacher')
+        ->name('setup.programme');
+
+    // ─── Rapports ─────────────────────────────────────────────────────────────
+    Volt::route('/rapports', 'rapports.index')
+        ->middleware('role:admin|direction|pedagogie')
+        ->name('rapports.index');
+
+    // ─── Import élèves (form POST, bypasses Livewire temp upload) ─────────────
+    Route::post('/configuration/eleves/import', \App\Http\Controllers\StudentImportController::class)
+        ->middleware('role:admin|direction')
+        ->name('students.import');
 });
 
 // ─── Authentification ─────────────────────────────────────────────────────────

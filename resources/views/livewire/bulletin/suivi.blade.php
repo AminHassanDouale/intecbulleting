@@ -211,8 +211,25 @@ new #[Layout('components.layouts.app')] class extends Component {
         $sectionOptions = $sections->map(fn($s) => ['id' => $s,    'name' => 'Section '.$s])->toArray();
         $periodOptions  = PeriodEnum::options();
 
+        // ── Global approval counts by trimester ───────────────────────────────
+        $currentYearId = (int) ($this->filterYear ?: AcademicYear::current()?->id);
+        $approvalStats = [];
+        foreach (['T1', 'T2', 'T3'] as $p) {
+            $bs = Bulletin::where('academic_year_id', $currentYearId)->where('period', $p)->get();
+            $approvalStats[$p] = [
+                'total'     => $bs->count(),
+                'draft'     => $bs->filter(fn($b) => $b->status === BulletinStatusEnum::DRAFT)->count(),
+                'submitted' => $bs->filter(fn($b) => $b->status === BulletinStatusEnum::SUBMITTED)->count(),
+                'ped'       => $bs->filter(fn($b) => $b->status === BulletinStatusEnum::PEDAGOGIE_APPROVED)->count(),
+                'fin'       => $bs->filter(fn($b) => $b->status === BulletinStatusEnum::FINANCE_APPROVED)->count(),
+                'approved'  => $bs->filter(fn($b) => $b->status === BulletinStatusEnum::APPROVED)->count(),
+                'published' => $bs->filter(fn($b) => $b->status === BulletinStatusEnum::PUBLISHED)->count(),
+                'rejected'  => $bs->filter(fn($b) => $b->status === BulletinStatusEnum::REJECTED)->count(),
+            ];
+        }
+
         return compact(
-            'classStats',
+            'classStats', 'approvalStats',
             'yearOptions','niveauOptions','classOptions','sectionOptions','periodOptions'
         );
     }
@@ -253,6 +270,53 @@ new #[Layout('components.layouts.app')] class extends Component {
         </div>
     </div>
 
+    {{-- ── Approval stats by trimester ────────────────────────────────────── --}}
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        @foreach(['T1' => '1er Trimestre', 'T2' => '2ème Trimestre', 'T3' => '3ème Trimestre'] as $period => $label)
+        @php $s = $approvalStats[$period]; @endphp
+        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            {{-- Header --}}
+            <div class="px-4 py-3 flex items-center justify-between border-b border-slate-100"
+                 style="background: linear-gradient(135deg,#1e3a8a,#1d4ed8);">
+                <span class="text-white font-black text-sm">{{ $label }}</span>
+                <span class="text-white/60 text-xs font-mono">{{ $s['total'] }} bulletins</span>
+            </div>
+            {{-- Rows --}}
+            <div class="divide-y divide-slate-50">
+                @foreach([
+                    ['icon'=>'👩‍🏫','label'=>'Enseignants','key'=>'draft',     'badge'=>'bg-slate-100 text-slate-600',  'hint'=>'en brouillon'],
+                    ['icon'=>'📚','label'=>'Pédagogie',   'key'=>'submitted', 'badge'=>'bg-orange-100 text-orange-700','hint'=>'en attente'],
+                    ['icon'=>'💰','label'=>'Finance',     'key'=>'ped',       'badge'=>'bg-blue-100 text-blue-700',    'hint'=>'en attente'],
+                    ['icon'=>'🎓','label'=>'Direction',   'key'=>'fin',       'badge'=>'bg-violet-100 text-violet-700','hint'=>'en attente'],
+                    ['icon'=>'✅','label'=>'Approuvés',   'key'=>'approved',  'badge'=>'bg-green-100 text-green-700',  'hint'=>'prêts'],
+                    ['icon'=>'📄','label'=>'Publiés',     'key'=>'published', 'badge'=>'bg-emerald-100 text-emerald-700','hint'=>'publiés'],
+                ] as $row)
+                @php $count = $s[$row['key']]; @endphp
+                <div class="flex items-center gap-3 px-4 py-2.5">
+                    <span class="text-base w-6 text-center shrink-0">{{ $row['icon'] }}</span>
+                    <span class="flex-1 text-sm text-slate-600">{{ $row['label'] }}</span>
+                    <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg text-xs font-bold {{ $row['badge'] }}">
+                        {{ $count }}
+                        @if($count > 0)
+                        <span class="font-normal opacity-70">{{ $row['hint'] }}</span>
+                        @endif
+                    </span>
+                </div>
+                @endforeach
+                @if($s['rejected'] > 0)
+                <div class="flex items-center gap-3 px-4 py-2.5 bg-red-50/50">
+                    <span class="text-base w-6 text-center shrink-0">❌</span>
+                    <span class="flex-1 text-sm text-red-600">Rejetés</span>
+                    <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg text-xs font-bold bg-red-100 text-red-700">
+                        {{ $s['rejected'] }} <span class="font-normal opacity-70">à corriger</span>
+                    </span>
+                </div>
+                @endif
+            </div>
+        </div>
+        @endforeach
+    </div>
+
     {{-- ── Filter button + active count ──────────────────────────────────── --}}
     <div class="flex items-center gap-3">
         <div class="relative">
@@ -287,7 +351,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         <x-choices label="Année scolaire" wire:model.live="filterYear"    :options="$yearOptions"    single clearable icon="o-calendar"         placeholder="Toutes les années" />
         <x-choices label="Trimestre"      wire:model.live="filterPeriod"  :options="$periodOptions"  single clearable icon="o-clock"            placeholder="Tous les trimestres" />
         <x-choices label="Niveau"         wire:model.live="filterNiveau"  :options="$niveauOptions"  single clearable icon="o-academic-cap"     placeholder="Tous les niveaux" />
-        <x-choices label="Classe"         wire:model.live="filterClass"   :options="$classOptions"   single clearable icon="o-building-library" placeholder="Toutes les classes" />
+        <x-choices wire:key="filterClass-{{ $filterNiveau }}" label="Classe" wire:model.live="filterClass" :options="$classOptions" single clearable icon="o-building-library" placeholder="Toutes les classes" />
         <x-choices label="Section"        wire:model.live="filterSection" :options="$sectionOptions" single clearable icon="o-tag"              placeholder="Toutes les sections" />
         <x-slot:actions>
             <x-button label="Réinitialiser" wire:click="$set('filterNiveau',''); $set('filterClass',''); $set('filterSection',''); $set('filterYear',''); $set('filterPeriod','')" icon="o-arrow-path" />

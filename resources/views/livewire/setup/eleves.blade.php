@@ -44,7 +44,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             $this->editId       = $s->id;
             $this->matricule    = $s->matricule;
             $this->full_name    = $s->full_name;
-            $this->birth_date   = $s->birth_date->format('Y-m-d');
+            $this->birth_date   = $s->birth_date?->format('Y-m-d');
             $this->gender       = $s->gender;
             $this->classroom_id = $s->classroom_id;
         }
@@ -268,25 +268,66 @@ new #[Layout('components.layouts.app')] class extends Component {
 
             <div class="divider my-0"></div>
 
-            {{-- Row 3: import --}}
-            <div class="flex flex-wrap items-center gap-3">
-                <p class="font-semibold text-xs text-base-content/50 w-20 shrink-0">IMPORT</p>
-                <div class="flex items-end gap-2">
-                    <div>
-                        <label class="label-text text-xs mb-1 block">Fichier .xlsx</label>
-                        <input type="file" wire:model="importFile" accept=".xlsx,.xls"
-                               class="file-input file-input-sm file-input-bordered w-52" />
+            {{-- Row 3: import (plain form POST — no Livewire temp upload) --}}
+            <div class="flex flex-wrap items-start gap-3">
+                <p class="font-semibold text-xs text-base-content/50 w-20 shrink-0 mt-2">IMPORT</p>
+                <div class="flex-1 min-w-0">
+
+                    {{-- Flash messages --}}
+                    @if(session('import_success'))
+                    <div class="alert alert-success py-2 px-3 text-sm mb-2 flex items-center gap-2">
+                        <svg class="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+                        {{ session('import_success') }}
                     </div>
-                    <x-button
-                        label="⬆ Importer"
-                        wire:click="importStudents"
-                        class="btn-primary btn-sm"
-                        spinner="importStudents"
-                        icon="o-arrow-up-tray"
-                        tooltip="Importer depuis un fichier Excel (format modèle)"
-                    />
+                    @endif
+                    @if(session('import_warning'))
+                    <div class="alert alert-warning py-2 px-3 text-sm mb-2 flex items-start gap-2">
+                        <svg class="w-4 h-4 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v4m0 4h.01M12 3a9 9 0 100 18A9 9 0 0012 3z"/></svg>
+                        <span class="break-all">{{ session('import_warning') }}</span>
+                    </div>
+                    @endif
+                    @if(session('import_error'))
+                    <div class="alert alert-error py-2 px-3 text-sm mb-2 flex items-center gap-2">
+                        <svg class="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+                        {{ session('import_error') }}
+                    </div>
+                    @endif
+                    @if($errors->has('importFile'))
+                    <div class="alert alert-error py-2 px-3 text-sm mb-2">{{ $errors->first('importFile') }}</div>
+                    @endif
+
+                    <form method="POST"
+                          action="{{ route('students.import') }}"
+                          enctype="multipart/form-data"
+                          x-data="{ fileName: '' }"
+                          class="flex flex-wrap items-end gap-2">
+                        @csrf
+                        <div>
+                            <label class="label-text text-xs mb-1 block text-base-content/60">
+                                Fichier .xlsx / .xls
+                            </label>
+                            <input
+                                type="file"
+                                name="importFile"
+                                accept=".xlsx,.xls,.csv"
+                                required
+                                x-on:change="fileName = $event.target.files[0]?.name ?? ''"
+                                class="file-input file-input-sm file-input-bordered w-64"
+                            />
+                            <p x-show="fileName" x-text="'Fichier : ' + fileName"
+                               class="mt-1 text-xs text-emerald-600 font-semibold"></p>
+                        </div>
+                        <button type="submit" class="btn btn-primary btn-sm gap-1.5">
+                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1M12 12V4m0 8l-3-3m3 3l3-3"/>
+                            </svg>
+                            Importer
+                        </button>
+                    </form>
+                    <p class="text-xs text-base-content/40 mt-1.5">
+                        Utiliser le modele ci-dessus. Formats acceptes : PS-A | A &nbsp;ou&nbsp; PS | A
+                    </p>
                 </div>
-                <span class="text-xs text-base-content/40 hidden sm:inline">— Utiliser le modèle ci-dessus. Les élèves existants (même matricule) seront mis à jour.</span>
             </div>
 
         </div>
@@ -309,13 +350,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </div>
                 @endscope
                 @scope('cell_birth_date', $student)
-                    <span class="text-sm">{{ $student->birth_date->format('d/m/Y') }}</span>
+                    <span class="text-sm">{{ $student->birth_date?->format('d/m/Y') ?? '—' }}</span>
                 @endscope
-                @scope('cell_age', $student)
-                    <span class="badge badge-ghost badge-sm font-semibold">
-                        {{ $student->birth_date->age }} ans
-                    </span>
-                @endscope
+
                 @scope('cell_gender', $student)
                     <span class="badge {{ $student->gender === 'M' ? 'badge-info' : 'badge-secondary' }} badge-sm font-medium">
                         {{ $student->gender === 'M' ? '👦 Garçon' : '👧 Fille' }}

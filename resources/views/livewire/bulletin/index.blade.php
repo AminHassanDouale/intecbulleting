@@ -1,6 +1,7 @@
 <?php
 
 use App\Actions\Bulletin\ApproveBulletinAction;
+use App\Actions\Bulletin\GenerateBulletinPdfAction;
 use App\Models\Bulletin;
 use App\Models\Classroom;
 use App\Enums\BulletinStatusEnum;
@@ -19,6 +20,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     public string $filterClassCode = '';
     public string $filterSection   = '';
     public string $filterNiveau    = '';   // '' | 'PRESCOLAIRE' | 'PRIMAIRE'
+    public bool   $filterEmpty     = false;  // show only bulletins with no grades
     public bool   $showFilters     = false;
     public array  $selectedIds     = [];
     public bool   $selectAll       = false;
@@ -91,7 +93,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     protected function getBulletins()
     {
-        $query = Bulletin::with(['student', 'classroom.niveau', 'academicYear'])
+        $query = Bulletin::withCount('grades')->with(['student', 'classroom.niveau', 'academicYear'])
             ->when($this->search, fn($q) =>
                 $q->whereHas('student', fn($sq) =>
                     $sq->where('full_name', 'like', "%{$this->search}%")
@@ -108,7 +110,8 @@ new #[Layout('components.layouts.app')] class extends Component {
             )
             ->when($this->filterNiveau, fn($q) =>
                 $q->whereHas('classroom.niveau', fn($nq) => $nq->where('code', $this->filterNiveau))
-            );
+            )
+            ->when($this->filterEmpty, fn($q) => $q->doesntHave('grades'));
 
         if (auth()->user()->hasRole('teacher')) {
             $query->where(fn($q) =>
@@ -542,6 +545,64 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->showGradeModal = true;
     }
 
+    public function generatePdf(int $id): void
+    {
+        $bulletin = Bulletin::findOrFail($id);
+
+        if ($bulletin->grades()->doesntExist()) {
+            $this->warning('Aucune note.', 'Ce bulletin est vide — saisissez d\'abord les notes.', icon: 'o-exclamation-triangle', position: 'toast-top toast-end');
+            return;
+        }
+
+        try {
+            app(GenerateBulletinPdfAction::class)->execute($bulletin);
+            $this->success('PDF généré !', 'Le bulletin est prêt au téléchargement.', icon: 'o-document-arrow-down', position: 'toast-top toast-end');
+        } catch (\Throwable $e) {
+            $this->error('Erreur PDF', $e->getMessage(), icon: 'o-x-circle', position: 'toast-top toast-end');
+            \Log::error('PDF generation error', ['bulletin_id' => $id, 'error' => $e->getMessage()]);
+        }
+    }
+
+    public function bulkGeneratePdfs(): void
+    {
+        if (empty($this->selectedIds)) {
+            $this->warning('Aucune sélection.', icon: 'o-information-circle', position: 'toast-top toast-end');
+            return;
+        }
+
+        $action  = app(GenerateBulletinPdfAction::class);
+        $done    = 0;
+        $skipped = 0;
+
+        foreach ($this->selectedIds as $id) {
+            $bulletin = Bulletin::find((int) $id);
+            if (! $bulletin || $bulletin->grades()->doesntExist()) { $skipped++; continue; }
+            try { $action->execute($bulletin); $done++; } catch (\Throwable) { $skipped++; }
+        }
+
+        $this->selectedIds = [];
+        $this->success("{$done} PDF(s) générés.", $skipped > 0 ? "{$skipped} ignorés (vides ou erreurs)." : '', icon: 'o-document-arrow-down', position: 'toast-top toast-end');
+    }
+
+    public function bulkGeneratePdfsAll(): void
+    {
+        $action   = app(GenerateBulletinPdfAction::class);
+        $done     = 0;
+        $skipped  = 0;
+
+        Bulletin::where('status', BulletinStatusEnum::PUBLISHED)
+            ->whereDoesntHave('media', fn($q) => $q->where('collection_name', 'bulletin_pdf'))
+            ->with(['student.classroom.niveau', 'grades.competence.subject', 'academicYear'])
+            ->chunkById(50, function ($bulletins) use ($action, &$done, &$skipped) {
+                foreach ($bulletins as $bulletin) {
+                    if ($bulletin->grades->isEmpty()) { $skipped++; continue; }
+                    try { $action->execute($bulletin); $done++; } catch (\Throwable) { $skipped++; }
+                }
+            });
+
+        $this->success("{$done} PDF(s) générés !", $skipped > 0 ? "{$skipped} ignorés (bulletins vides)." : 'Tous les bulletins publiés ont un PDF.', icon: 'o-document-arrow-down', position: 'toast-top toast-end');
+    }
+
     public function with(): array
     {
         $classCodes = Classroom::orderBy('code')->distinct()->pluck('code')
@@ -580,6 +641,9 @@ new #[Layout('components.layouts.app')] class extends Component {
             ])->count(),
             'statPublished'  => (clone $base)->where('status', BulletinStatusEnum::PUBLISHED)->count(),
             'statRejected'   => (clone $base)->where('status', BulletinStatusEnum::REJECTED)->count(),
+            'statEmpty'      => (clone $base)->doesntHave('grades')->count(),
+            'statNoPdf'      => (clone $base)->where('status', BulletinStatusEnum::PUBLISHED)
+                                    ->whereDoesntHave('media', fn($q) => $q->where('collection_name','bulletin_pdf'))->count(),
             'statusOptions'  => (function () {
                 $user    = auth()->user();
                 $allowed = match(true) {
@@ -638,10 +702,20 @@ new #[Layout('components.layouts.app')] class extends Component {
                 </div>
             </div>
             @role('direction|admin')
-            <a href="{{ route('bulletins.annual') }}" wire:navigate
-               class="btn btn-sm bg-white/20 hover:bg-white/30 border-0 text-white gap-1 self-start sm:self-auto">
-                📈 Bilan Annuel
-            </a>
+            <div class="flex items-center gap-2 self-start sm:self-auto">
+                <x-button
+                    label="🖨 Générer tous les PDFs"
+                    wire:click="bulkGeneratePdfsAll"
+                    class="btn-sm bg-white/20 hover:bg-white/30 border-0 text-white"
+                    spinner="bulkGeneratePdfsAll"
+                    wire:confirm="Générer les PDFs pour tous les bulletins publiés sans PDF ? Cela peut prendre plusieurs minutes."
+                    tooltip="Génère les PDFs manquants pour tous les bulletins publiés"
+                />
+                <a href="{{ route('bulletins.annual') }}" wire:navigate
+                   class="btn btn-sm bg-white/20 hover:bg-white/30 border-0 text-white gap-1">
+                    📈 Bilan Annuel
+                </a>
+            </div>
             @endrole
         </div>
     </div>
@@ -686,6 +760,38 @@ new #[Layout('components.layouts.app')] class extends Component {
         </button>
         @endforeach
     </div>
+
+    {{-- Warning banners: empty bulletins + missing PDFs --}}
+    @role('direction|admin')
+    @if($statEmpty > 0)
+    <div class="flex items-center gap-3 px-4 py-3 bg-orange-50 border border-orange-200 rounded-xl text-sm">
+        <span class="text-xl shrink-0">⚠️</span>
+        <div class="flex-1">
+            <p class="font-semibold text-orange-800">{{ $statEmpty }} bulletin(s) sans notes</p>
+            <p class="text-xs text-orange-600">Ces bulletins sont publiés mais vides — les notes doivent être saisies manuellement dans <strong>Saisie des Notes</strong>.</p>
+        </div>
+        <button wire:click="$set('filterEmpty', true)" class="btn btn-xs btn-warning shrink-0">Voir</button>
+    </div>
+    @endif
+    @if($statNoPdf > 0)
+    <div class="flex items-center gap-3 px-4 py-3 bg-blue-50 border border-blue-200 rounded-xl text-sm">
+        <span class="text-xl shrink-0">📄</span>
+        <div class="flex-1">
+            <p class="font-semibold text-blue-800">{{ $statNoPdf }} bulletin(s) publiés sans PDF</p>
+            <p class="text-xs text-blue-600">Le bouton ⬇️ n'apparaîtra qu'après génération du PDF.</p>
+        </div>
+        <x-button label="Générer tous" wire:click="bulkGeneratePdfsAll" class="btn-xs btn-primary shrink-0"
+            spinner="bulkGeneratePdfsAll"
+            wire:confirm="Générer les PDFs manquants pour tous les bulletins publiés ?" />
+    </div>
+    @endif
+    @if($filterEmpty)
+    <div class="flex items-center gap-2 px-3 py-2 bg-orange-100 border border-orange-300 rounded-lg text-xs text-orange-800">
+        <span>Filtre actif : bulletins sans notes</span>
+        <button wire:click="$set('filterEmpty', false)" class="btn btn-xs btn-ghost ml-auto">✕ Effacer</button>
+    </div>
+    @endif
+    @endrole
 
     {{-- Filters --}}
     {{-- Search + filter button --}}
@@ -746,6 +852,12 @@ new #[Layout('components.layouts.app')] class extends Component {
             wire:confirm="Approuver les {{ count($selectedIds) }} bulletin(s) sélectionné(s) ?" />
         <x-button label="✗ Rejeter" wire:click="openBulkRejectModal" class="btn-error btn-sm"
             icon="o-arrow-uturn-left" />
+        @endrole
+
+        @role('direction|admin')
+        <x-button label="🖨 PDFs" wire:click="bulkGeneratePdfs" class="btn-info btn-sm"
+            spinner="bulkGeneratePdfs" icon="o-document-arrow-down"
+            tooltip="Générer les PDFs pour la sélection" />
         @endrole
 
         <x-button label="Annuler" wire:click="$set('selectedIds', [])" class="btn-ghost btn-sm" icon="o-x-mark" />
@@ -820,9 +932,17 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 @endif
                             </td>
                             <td>
-                                <span class="badge {{ $bulletin->status->color() }} badge-sm font-medium">
-                                    {{ $bulletin->status->label() }}
-                                </span>
+                                <div class="flex items-center gap-1.5 flex-wrap">
+                                    <span class="badge {{ $bulletin->status->color() }} badge-sm font-medium">
+                                        {{ $bulletin->status->label() }}
+                                    </span>
+                                    @if($bulletin->grades_count === 0)
+                                        <span class="badge badge-warning badge-xs font-semibold" title="Aucune note saisie">⚠ Vide</span>
+                                    @endif
+                                    @if($bulletin->status->value === 'published' && ! $bulletin->getPdfUrl())
+                                        <span class="badge badge-ghost badge-xs" title="PDF non généré">sans PDF</span>
+                                    @endif
+                                </div>
                             </td>
                             <td>
                                 <div class="flex gap-1 flex-wrap justify-end">
@@ -846,10 +966,17 @@ new #[Layout('components.layouts.app')] class extends Component {
                                         <x-button label="Rejeter" wire:click="openRejectModal({{ $bulletin->id }})"
                                             class="btn-xs btn-error" icon="o-x-mark" />
                                     @endcan
+                                    {{-- Generate PDF (direction/admin) --}}
+                                    @role('direction|admin')
+                                    @if($bulletin->status->value === 'published' && ! $bulletin->getPdfUrl() && $bulletin->grades_count > 0)
+                                        <x-button wire:click="generatePdf({{ $bulletin->id }})" class="btn-xs btn-info"
+                                            icon="o-document-arrow-down" tooltip="Générer le PDF" spinner="generatePdf({{ $bulletin->id }})" />
+                                    @endif
+                                    @endrole
                                     {{-- PDF download if published --}}
                                     @if($bulletin->status->value === 'published' && $bulletin->getPdfUrl())
                                         <a href="{{ route('bulletins.download', $bulletin->id) }}?download=1"
-                                           class="btn btn-xs btn-outline">⬇️</a>
+                                           class="btn btn-xs btn-outline" title="Télécharger PDF">⬇️</a>
                                     @endif
                                     {{-- Carnet d'évaluation printable --}}
                                     @if($bulletin->status->value === 'published')

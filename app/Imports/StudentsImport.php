@@ -22,10 +22,11 @@ use Maatwebsite\Excel\Concerns\WithHeadingRow;
  */
 class StudentsImport implements ToModel, WithHeadingRow
 {
-    public int   $imported     = 0;
-    public int   $skipped      = 0;
-    public int   $updated      = 0;
-    public array $importErrors = [];
+    public int   $imported      = 0;
+    public int   $skipped       = 0;
+    public int   $duplicates    = 0;   // silent: same name in same file
+    public int   $alreadyInDb   = 0;   // silent: already exists in DB
+    public array $importErrors  = [];
 
     /** Tracks "classroom_id:normalized_name" seen in this import batch to catch intra-file duplicates. */
     private array $seenInBatch = [];
@@ -59,7 +60,11 @@ class StudentsImport implements ToModel, WithHeadingRow
                 trim((string) ($row['section']     ?? ''))
             );
 
-            $classroom = Classroom::where('code', $code)->where('section', $section)->first();
+            // Try exact match first, then hyphen-combined (e.g. "PS"+"A" → code="PS-A")
+            $classroom = Classroom::where('code', '=', $code, 'and')->where('section', '=', $section, 'and')->first()
+                ?? ($section !== ''
+                    ? Classroom::where('code', '=', $code . '-' . $section, 'and')->where('section', '=', $section, 'and')->first()
+                    : null);
 
             if (!$classroom) {
                 $this->importErrors[] = "Classe introuvable « {$code} {$section} » pour : {$fullName}";
@@ -68,7 +73,7 @@ class StudentsImport implements ToModel, WithHeadingRow
             }
 
             // ── Academic year ─────────────────────────────────────────────────
-            $year = AcademicYear::where('is_current', true)->first();
+            $year = AcademicYear::where('is_current', '=', true, 'and')->first();
             if (!$year) {
                 $this->importErrors[] = "Aucune année scolaire courante";
                 $this->skipped++;
@@ -83,23 +88,22 @@ class StudentsImport implements ToModel, WithHeadingRow
                 return null;
             }
 
-            // ── Duplicate check: in this file ────────────────────────────────
-            $key = $classroom->id . ':' . mb_strtolower(preg_replace('/\s+/', ' ', $fullName));
+            // ── Duplicate: same name + same class + same birth date (in this file) ──────
+            $key = $classroom->id . ':' . mb_strtolower(preg_replace('/\s+/', ' ', $fullName)) . ':' . $birthDate;
 
             if (isset($this->seenInBatch[$key])) {
-                $this->importErrors[] = "Doublon dans le fichier : « {$fullName} » déjà présent dans {$classroom->label}";
-                $this->skipped++;
+                $this->duplicates++;
                 return null;
             }
 
-            // ── Duplicate check: in database ──────────────────────────────────
-            $existsInDb = Student::where('classroom_id', $classroom->id)
+            // ── Duplicate: same name + same class + same birth date (in database) ────────
+            $existsInDb = Student::where('classroom_id', '=', $classroom->id, 'and')
                 ->whereRaw('LOWER(full_name) = ?', [mb_strtolower($fullName)])
+                ->where('birth_date', '=', $birthDate, 'and')
                 ->exists();
 
             if ($existsInDb) {
-                $this->importErrors[] = "Déjà en base : « {$fullName} » existe déjà dans {$classroom->label}";
-                $this->skipped++;
+                $this->alreadyInDb++;
                 return null;
             }
 
@@ -124,15 +128,41 @@ class StudentsImport implements ToModel, WithHeadingRow
         }
     }
 
-    /** "CPA" → ["CP","A"]  |  "CE2B" → ["CE2","B"]  |  "CP"+"A" → ["CP","A"] */
+    /**
+     * Resolve classroom code + section from various formats:
+     *   "PS-A" + ""  → ["PS","A"]
+     *   "PS-A" + "A" → ["PS","A"]
+     *   "CPA"  + ""  → ["CP","A"]
+     *   "CE2B" + ""  → ["CE2","B"]
+     *   "CP"   + "A" → ["CP","A"]
+     */
     private function resolveClassCode(string $code, string $section): array
     {
+        // "CE2 A", "PS A" — space-separated in the same cell
+        if (str_contains($code, ' ')) {
+            $parts  = explode(' ', $code, 2);
+            $base   = strtoupper(trim($parts[0]));
+            $suffix = strtoupper(trim($parts[1]));
+            return [$base, $section !== '' ? strtoupper($section) : $suffix];
+        }
+
+        // "PS-A", "CE2-B" — hyphen-separated
+        if (str_contains($code, '-')) {
+            $parts  = explode('-', $code, 2);
+            $base   = strtoupper($parts[0]);
+            $suffix = strtoupper($parts[1]);
+            return [$base, $section !== '' ? strtoupper($section) : $suffix];
+        }
+
         if ($section !== '') {
             return [strtoupper($code), strtoupper($section)];
         }
+
+        // "CPA" → ["CP","A"], "CE2B" → ["CE2","B"]
         if (strlen($code) > 1 && ctype_alpha(substr($code, -1))) {
             return [strtoupper(substr($code, 0, -1)), strtoupper(substr($code, -1))];
         }
+
         return [strtoupper($code), ''];
     }
 
@@ -141,33 +171,61 @@ class StudentsImport implements ToModel, WithHeadingRow
     {
         if ($v === null || $v === '') return null;
 
-        // Excel numeric serial
-        if (is_numeric($v) && $v > 1000) {
-            try { return Carbon::createFromTimestamp(($v - 25569) * 86400)->format('Y-m-d'); }
-            catch (\Throwable) {}
+        $currentYear = (int) date('Y');
+
+        // Excel numeric serial (PhpSpreadsheet's own converter avoids manual formula errors)
+        if (is_numeric($v) && (float) $v > 1000) {
+            try {
+                $dt = \PhpOffice\PhpSpreadsheet\Shared\Date::excelToDateTimeObject((float) $v);
+                $year = (int) $dt->format('Y');
+                if ($year >= 1990 && $year <= $currentYear) {
+                    return $dt->format('Y-m-d');
+                }
+            } catch (\Throwable) {}
+            // Serial didn't yield a valid school-age date — fall through to string parse
         }
 
         $s = trim((string) $v);
+        // Collapse spaces around separators: "31 /01/2021" → "31/01/2021"
+        $s = preg_replace('/\s*([\/\-\.])\s*/', '$1', $s);
+        // Normalize dot separators to slashes: "28.11.2022" → "28/11/2022"
+        if (preg_match('/^\d{1,2}\.\d{1,2}\.\d{2,4}$/', $s)) {
+            $s = str_replace('.', '/', $s);
+        }
+        // Normalize 2-digit years: "28/11/22" → "28/11/2022"
+        $s = preg_replace('/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2})$/', '$1/$2/20$3', $s);
 
-        foreach (['j/n/Y', 'd/m/Y', 'Y-m-d', 'j-n-Y', 'd-m-Y'] as $fmt) {
-            try { return Carbon::createFromFormat($fmt, $s)->format('Y-m-d'); }
-            catch (\Throwable) {}
+        foreach (['j/n/Y', 'd/m/Y', 'Y-m-d', 'j-n-Y', 'd-m-Y', 'Y/m/d', 'Y/n/j'] as $fmt) {
+            try {
+                $date = Carbon::createFromFormat($fmt, $s);
+                $year = (int) $date->format('Y');
+                if ($year >= 1990 && $year <= $currentYear) {
+                    return $date->format('Y-m-d');
+                }
+            } catch (\Throwable) {}
         }
 
-        try { return Carbon::parse($s)->format('Y-m-d'); }
-        catch (\Throwable) {
-            Log::warning('StudentsImport: bad date', ['input' => $v]);
-            return null;
-        }
+        // Last-resort parse — only accept if year is in reasonable range
+        try {
+            $date = Carbon::parse($s);
+            $year = (int) $date->format('Y');
+            if ($year >= 1990 && $year <= $currentYear) {
+                return $date->format('Y-m-d');
+            }
+        } catch (\Throwable) {}
+
+        Log::warning('StudentsImport: bad date', ['raw' => $v, 'normalized' => $s]);
+        return null;
     }
 
     public function getStats(): array
     {
         return [
-            'imported' => $this->imported,
-            'updated'  => $this->updated,
-            'skipped'  => $this->skipped,
-            'errors'   => $this->importErrors,
+            'imported'    => $this->imported,
+            'duplicates'  => $this->duplicates,
+            'alreadyInDb' => $this->alreadyInDb,
+            'skipped'     => $this->skipped,
+            'errors'      => $this->importErrors,
         ];
     }
 }

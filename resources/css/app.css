@@ -6,8 +6,6 @@
 @source '../../storage/framework/views/*.php';
 @source '../**/*.blade.php';
 @source '../**/*.js';
-
-/* MaryUI + DaisyUI vendor sources */
 @source '../../vendor/robsontenorio/mary/src/View/Components/**/*.php';
 
 @plugin "daisyui" {
@@ -15,36 +13,99 @@
 }
 
 @theme {
-    --font-sans: 'Instrument Sans', ui-sans-serif, system-ui, sans-serif;
+    --font-sans: 'Figtree', 'Cairo', ui-sans-serif, system-ui, sans-serif;
 }
 
-/* ── Override DaisyUI light theme with vivid, visible colors ──────────────── */
+/* ── INTEC Light Theme ─────────────────────────────────────────────────────── */
 [data-theme="light"] {
-    /* Primary: indigo-600 — vivid blue-indigo */
-    --color-primary:         oklch(51.01% 0.2742 264.05);
-    --color-primary-content: oklch(100%   0      0);
+    /* Primary: INTEC teal #16363a */
+    --color-primary:           oklch(24% 0.035 196);
+    --color-primary-content:   oklch(100% 0 0);
 
-    /* Secondary: violet-600 */
-    --color-secondary:         oklch(53.18% 0.2804 296.70);
-    --color-secondary-content: oklch(100%   0      0);
+    /* Secondary: INTEC gold #c8913a */
+    --color-secondary:         oklch(63% 0.123 67);
+    --color-secondary-content: oklch(100% 0 0);
 
-    /* Accent: sky-500 */
-    --color-accent:         oklch(68.50% 0.1693 237.32);
-    --color-accent-content: oklch(100%   0      0);
+    /* Accent: teal mid-tone */
+    --color-accent:            oklch(72% 0.10 192);
+    --color-accent-content:    oklch(18% 0.03 196);
 
-    /* Error: red-600 */
-    --color-error:         oklch(53.02% 0.2323 27.32);
-    --color-error-content: oklch(100%   0      0);
+    /* Neutrals */
+    --color-neutral:           oklch(22% 0.01 260);
+    --color-neutral-content:   oklch(100% 0 0);
 
-    /* Success: emerald-600 */
-    --color-success:         oklch(54.58% 0.2030 149.58);
-    --color-success-content: oklch(100%   0      0);
+    /* Bases */
+    --color-base-100:          oklch(100% 0 0);
+    --color-base-200:          oklch(97%  0.004 240);
+    --color-base-300:          oklch(92%  0.005 240);
+    --color-base-content:      oklch(20%  0.01  260);
 
-    /* Warning: amber-500 */
-    --color-warning:         oklch(74.51% 0.1673 66.29);
-    --color-warning-content: oklch(20%    0      0);
-
-    /* Info: blue-600 */
-    --color-info:         oklch(54.60% 0.2145 264.05);
-    --color-info-content: oklch(100%   0      0);
+    /* Status */
+    --color-error:             oklch(53.02% 0.2323 27.32);
+    --color-error-content:     oklch(100% 0 0);
+    --color-success:           oklch(54.58% 0.2030 149.58);
+    --color-success-content:   oklch(100% 0 0);
+    --color-warning:           oklch(74.51% 0.1673 66.29);
+    --color-warning-content:   oklch(20% 0 0);
+    --color-info:              oklch(54.60% 0.2145 264.05);
+    --color-info-content:      oklch(100% 0 0);
 }
+
+/* ── INTEC Dark Theme ──────────────────────────────────────────────────────── */
+[data-theme="dark"] {
+    /* Primary: lighter teal for dark bg */
+    --color-primary:           oklch(76% 0.105 192);
+    --color-primary-content:   oklch(16% 0.03  196);
+
+    /* Secondary: gold */
+    --color-secondary:         oklch(72% 0.127 67);
+    --color-secondary-content: oklch(16% 0.03  67);
+
+    /* Accent */
+    --color-accent:            oklch(63% 0.123 67);
+    --color-accent-content:    oklch(100% 0 0);
+
+    /* Neutrals */
+    --color-neutral:           oklch(38% 0.01 260);
+    --color-neutral-content:   oklch(96% 0.005 240);
+
+    /* Bases */
+    --color-base-100:          oklch(17% 0.012 265);
+    --color-base-200:          oklch(22% 0.012 265);
+    --color-base-300:          oklch(27% 0.012 265);
+    --color-base-content:      oklch(88% 0.008 260);
+
+    /* Status */
+    --color-error:             oklch(64.76% 0.2192 27.32);
+    --color-error-content:     oklch(100% 0 0);
+    --color-success:           oklch(66.52% 0.1895 149.58);
+    --color-success-content:   oklch(100% 0 0);
+    --color-warning:           oklch(82% 0.1673 66.29);
+    --color-warning-content:   oklch(15% 0 0);
+    --color-info:              oklch(68% 0.1800 264.05);
+    --color-info-content:      oklch(100% 0 0);
+}
+
+/* ── Grade colors ──────────────────────────────────────────────────────────── */
+.grade-a { color: oklch(54.58% 0.2030 149.58); font-weight: 700; }
+.grade-b { color: oklch(54.60% 0.2145 264.05); font-weight: 600; }
+.grade-c { color: oklch(74.51% 0.1673 66.29);  font-weight: 600; }
+.grade-d { color: oklch(53.02% 0.2323 27.32);  font-weight: 600; }
+
+/* ── Drawer scroll fix ─────────────────────────────────────────────────────── */
+.drawer-content { height: 100dvh; overflow-y: auto; }
+
+/* ── Toast alerts ──────────────────────────────────────────────────────────── */
+[class*="toast"] .alert {
+    min-width: 280px; max-width: 380px;
+    box-shadow: 0 10px 40px rgba(0,0,0,.18), 0 4px 12px rgba(0,0,0,.10);
+    border-radius: .875rem; padding: .875rem 1rem;
+    border: none; font-size: .875rem;
+}
+[class*="toast"] .alert-success { background: linear-gradient(135deg,#16a34a,#15803d); color:#fff; }
+[class*="toast"] .alert-error   { background: linear-gradient(135deg,#dc2626,#b91c1c); color:#fff; }
+[class*="toast"] .alert-warning { background: linear-gradient(135deg,#d97706,#b45309); color:#fff; }
+[class*="toast"] .alert-info    { background: linear-gradient(135deg,#2563eb,#1d4ed8); color:#fff; }
+[class*="toast"] .alert svg,
+[class*="toast"] .alert .font-bold,
+[class*="toast"] .alert .text-xs { color: #fff; }

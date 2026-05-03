@@ -134,11 +134,23 @@ new #[Layout('components.layouts.app')] class extends Component {
             $bulletin->update(['teacher_comment' => $this->teacherComment]);
         }
 
-        // Direction/admin: just save — do NOT auto-submit to workflow.
-        // Use "Tout soumettre" button when ready to forward to pédagogie.
+        // Direction/admin: bypass entire workflow — mark bulletin APPROVED immediately.
         if ($isDirection) {
-            $this->success('Notes enregistrées.', icon: 'o-check-circle', position: 'toast-top toast-end');
-            $this->loadOrCreateBulletin($this->selectedStudent);
+            $now = now();
+            $uid = auth()->id();
+            $bulletin->update([
+                'status'                => BulletinStatusEnum::APPROVED,
+                'submitted_by'          => $uid,
+                'submitted_at'          => $now,
+                'pedagogie_approved_by' => $uid,
+                'pedagogie_approved_at' => $now,
+                'finance_approved_by'   => $uid,
+                'finance_approved_at'   => $now,
+                'direction_approved_by' => $uid,
+                'direction_approved_at' => $now,
+            ]);
+            $this->success('Bulletin approuvé !', 'Prêt à être publié.', icon: 'o-check-badge', position: 'toast-top toast-end');
+            $this->resetForm();
             return;
         }
 
@@ -388,8 +400,9 @@ new #[Layout('components.layouts.app')] class extends Component {
             }
         }
 
-        $teacherId = $this->getTeacherIdForExportImport();
-        $importer  = new GradeSheetImport($this->selectedClassroom, $this->selectedPeriod, $this->selectedYear, $this->selectedNiveau, $teacherId);
+        $isDirection = auth()->user()->hasAnyRole(['admin', 'direction']);
+        $teacherId   = $this->getTeacherIdForExportImport();
+        $importer    = new GradeSheetImport($this->selectedClassroom, $this->selectedPeriod, $this->selectedYear, $this->selectedNiveau, $teacherId);
 
         try {
             $stored   = $this->importFile->store('grade-imports', 'local');
@@ -400,12 +413,55 @@ new #[Layout('components.layouts.app')] class extends Component {
             \Illuminate\Support\Facades\Storage::disk('local')->delete($stored);
             $this->importFile = null;
 
-            $message = "Import réussi ! {$importer->imported} élève(s), {$importer->skipped} ignoré(s).";
-            if ($teacherId && $importer->imported > 0) {
-                $message .= " Seules vos matières ont été importées.";
+            // Direction/admin: bypass workflow — mark every imported bulletin APPROVED (if grades were actually saved)
+            if ($isDirection && $importer->gradesTotal > 0) {
+                $now = now();
+                $uid = auth()->id();
+                Student::where('classroom_id', $this->selectedClassroom)
+                    ->get()
+                    ->each(function ($student) use ($now, $uid) {
+                        $bulletin = Bulletin::where([
+                            'student_id'       => $student->id,
+                            'academic_year_id' => $this->selectedYear,
+                            'period'           => $this->selectedPeriod,
+                        ])->first();
+                        if ($bulletin && $bulletin->grades()->count() > 0) {
+                            $bulletin->update([
+                                'status'                => BulletinStatusEnum::APPROVED,
+                                'submitted_by'          => $uid, 'submitted_at'          => $now,
+                                'pedagogie_approved_by' => $uid, 'pedagogie_approved_at' => $now,
+                                'finance_approved_by'   => $uid, 'finance_approved_at'   => $now,
+                                'direction_approved_by' => $uid, 'direction_approved_at' => $now,
+                            ]);
+                        }
+                    });
             }
 
-            $this->success($message, icon: 'o-arrow-up-tray', position: 'toast-top toast-end');
+            $grades  = $importer->gradesTotal;
+            $message = "{$importer->imported} élève(s) traité(s), {$grades} note(s) enregistrée(s)";
+            if ($importer->skipped > 0) {
+                $message .= ", {$importer->skipped} ignoré(s)";
+            }
+            $message .= '.';
+            if ($teacherId && $importer->imported > 0) {
+                $message .= ' Seules vos matières ont été importées.';
+            }
+            if ($isDirection && $importer->gradesTotal > 0) {
+                $message .= ' Bulletins approuvés automatiquement.';
+            }
+
+            if (! empty($importer->errors)) {
+                $this->warning($message, implode(' | ', array_slice($importer->errors, 0, 3)), icon: 'o-exclamation-triangle', position: 'toast-top toast-end');
+            } elseif ($importer->imported === 0) {
+                $hint = $importer->skipped > 0
+                    ? 'Vérifiez que les matricules correspondent au fichier exporté.'
+                    : 'Aucune ligne de données trouvée. Vérifiez le format du fichier.';
+                $this->warning("0 élève importé, {$importer->skipped} ignoré(s).", $hint, icon: 'o-exclamation-triangle', position: 'toast-top toast-end');
+            } elseif ($grades === 0) {
+                $this->warning($message, 'Les cellules de notes étaient vides — remplissez le fichier Excel avant de ré-importer.', icon: 'o-exclamation-triangle', position: 'toast-top toast-end');
+            } else {
+                $this->success($message, icon: 'o-arrow-up-tray', position: 'toast-top toast-end');
+            }
 
             if ($this->selectedStudent) {
                 $this->loadOrCreateBulletin($this->selectedStudent);
@@ -573,6 +629,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 <x-choices label="Année scolaire" wire:model.live="selectedYear"   :options="$years"   single clearable placeholder="Sélectionner…" icon="o-calendar" />
                 <x-select  label="Niveau"          wire:model.live="selectedNiveau" :options="$niveaux" placeholder="Sélectionner…" icon="o-academic-cap" class="select-bordered bg-base-100" />
                 <x-select  label="Classe"
+                    wire:key="classroom-select-{{ $selectedNiveau ?? 'none' }}"
                     wire:model.live="selectedClassroom"
                     :options="$classrooms->toArray()"
                     placeholder="{{ $selectedNiveau ? 'Sélectionner…' : '— Choisir un niveau —' }}"

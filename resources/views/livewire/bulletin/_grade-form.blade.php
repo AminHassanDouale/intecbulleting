@@ -126,20 +126,21 @@
 <div class="mt-3 pt-3 border-t border-base-200">
 
     @if($isDir)
-    {{-- Direction: simple save, no workflow lock --}}
+    {{-- Direction: saves bypass workflow → immediately APPROVED --}}
     <div class="flex items-start gap-2 mb-3 p-2.5 rounded-xl bg-blue-50 border border-blue-100 text-xs text-blue-700">
         <svg class="w-4 h-4 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
         </svg>
-        <span>Notes enregistrées en brouillon. Utilisez <strong>Tout soumettre</strong> dans la barre d'outils pour transmettre à la pédagogie.</span>
+        <span>En tant que direction, l'enregistrement <strong>approuve immédiatement</strong> le bulletin — aucune validation intermédiaire requise.</span>
     </div>
     <div class="flex justify-end">
         <x-button
-            label="💾 Enregistrer"
+            label="✅ Enregistrer & Approuver"
             wire:click="saveGrades"
             class="btn-primary btn-sm"
             spinner="saveGrades"
-            icon="o-check-circle"
+            icon="o-check-badge"
+            wire:confirm="Approuver ce bulletin directement ? Il passera au statut Approuvé, prêt pour la publication."
         />
     </div>
 

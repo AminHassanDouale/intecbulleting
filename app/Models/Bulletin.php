@@ -94,7 +94,7 @@ class Bulletin extends Model implements HasMedia
     {
         $user = \App\Models\User::find($userId);
         if ($user?->hasAnyRole(['admin', 'direction'])) {
-            return ! in_array($this->status->value, ['approved', 'published']);
+            return $this->status !== BulletinStatusEnum::PUBLISHED;
         }
 
         if ($this->status === BulletinStatusEnum::REJECTED) {

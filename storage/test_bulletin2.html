@@ -1,0 +1,733 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<style>
+  * { font-family: 'DejaVu Sans', Arial, sans-serif; font-size: 9pt; margin: 0; padding: 0; box-sizing: border-box; }
+  body { margin: 0; color: #1a1a1a; background: #fff; }
+
+  /* ── Header ── */
+  .header-band {
+    background: #1e3a8a;
+    color: white;
+    padding: 12px 16px;
+    border-bottom: 4px solid #f59e0b;
+  }
+  .header-table { width: 100%; }
+  .header-table td { vertical-align: top; }
+  .header-logo-cell { width: 70px; text-align: center; }
+  .header-logo { width: 60px; height: 60px; border: 2px solid rgba(255,255,255,.3); border-radius: 6px; object-fit: contain; background: white; padding: 4px; }
+  .header-center { text-align: center; }
+  .school-name { font-size: 14pt; font-weight: bold; color: #fcd34d; letter-spacing: 1px; }
+  .school-sub   { font-size: 8pt; color: rgba(255,255,255,.8); margin-top: 2px; }
+  .bulletin-title { font-size: 13pt; font-weight: bold; color: white; margin-top: 6px; text-transform: uppercase; letter-spacing: 2px; }
+  .annee-label { font-size: 8.5pt; color: #fcd34d; margin-top: 3px; }
+
+  /* ── Student info ── */
+  .info-band {
+    background: #1e40af;
+    color: white;
+    padding: 8px 16px;
+    border-bottom: 3px solid #f59e0b;
+  }
+  .info-table { width: 100%; border-collapse: collapse; }
+  .info-table td { padding: 2px 8px; color: white; font-size: 8.5pt; }
+  .info-label { color: #fcd34d; font-weight: bold; }
+
+  /* ── Legend ── */
+  .legend-box {
+    margin: 10px 14px 6px;
+    border: 1px solid #bfdbfe;
+    border-radius: 4px;
+    background: #eff6ff;
+    padding: 6px 10px;
+  }
+  .legend-title { font-weight: bold; font-size: 8pt; color: #1e3a8a; margin-bottom: 4px; }
+  .legend-table { border-collapse: collapse; width: 100%; }
+  .legend-table td { padding: 2px 8px; font-size: 7.5pt; border: 1px solid #dbeafe; text-align: center; }
+  .legend-table th { padding: 3px 8px; font-size: 7.5pt; background: #1e3a8a; color: white; border: 1px solid #1e3a8a; }
+  .badge-a   { background: #16a34a; color: white; padding: 1px 6px; font-size: 8pt; font-weight: bold; }
+  .badge-eva { background: #d97706; color: white; padding: 1px 6px; font-size: 8pt; font-weight: bold; }
+  .badge-na  { background: #dc2626; color: white; padding: 1px 6px; font-size: 8pt; font-weight: bold; }
+  .badge-dash { color: #9ca3af; font-size: 9pt; }
+
+  /* ── Subject sections ── */
+  .section-wrap { margin: 0 14px 10px; }
+  .section-head {
+    background: #1e3a8a;
+    color: white;
+    padding: 5px 10px;
+    font-weight: bold;
+    font-size: 9.5pt;
+    border-radius: 3px 3px 0 0;
+    border-left: 4px solid #f59e0b;
+  }
+  table.comp { width: 100%; border-collapse: collapse; }
+  table.comp th {
+    background: #dbeafe;
+    color: #1e3a8a;
+    padding: 4px 8px;
+    border: 1px solid #bfdbfe;
+    font-size: 8pt;
+    text-align: center;
+  }
+  table.comp th.desc { text-align: left; }
+  table.comp td { padding: 4px 8px; border: 1px solid #e5e7eb; font-size: 8.5pt; }
+  table.comp td.center { text-align: center; }
+  .comp-code { color: #1e40af; font-weight: bold; }
+
+  /* ── Comments ── */
+  .comment-area { margin: 0 14px 8px; }
+  .comment-label { font-weight: bold; font-size: 8.5pt; color: #1e3a8a; margin-bottom: 3px; }
+  .comment-box {
+    border: 1px solid #bfdbfe;
+    border-radius: 3px;
+    min-height: 36px;
+    padding: 6px 8px;
+    background: #f0f7ff;
+    font-size: 8.5pt;
+    color: #1a1a1a;
+  }
+  .comment-dir { border-color: #f59e0b; background: #fffbeb; }
+
+  /* ── Signatures ── */
+  .sig-section { margin: 10px 14px 0; border-top: 2px solid #1e3a8a; padding-top: 8px; }
+  .sig-table { width: 100%; border-collapse: collapse; }
+  .sig-table td { padding: 4px 6px; vertical-align: top; }
+  .sig-box {
+    border: 1px solid #bfdbfe;
+    min-height: 55px;
+    padding: 5px 8px;
+    border-radius: 3px;
+    background: #f8fafc;
+  }
+  .sig-title { font-weight: bold; font-size: 8pt; color: #1e3a8a; margin-bottom: 4px; }
+
+  /* ── Period indicator ── */
+  .period-tag {
+    display: inline-block;
+    background: #f59e0b;
+    color: #1a1a1a;
+    font-weight: bold;
+    font-size: 8pt;
+    padding: 2px 8px;
+    border-radius: 10px;
+    margin-left: 6px;
+  }
+</style>
+</head>
+<body>
+
+
+
+<div class="header-band">
+  <table class="header-table">
+    <tr>
+      <td class="header-logo-cell">
+        
+        <div style="width:58px;height:58px;border:2px solid rgba(255,255,255,.3);border-radius:6px;background:white;text-align:center;padding-top:10px;">
+          <span style="font-size:22pt;">🏫</span>
+        </div>
+      </td>
+      <td class="header-center">
+        <div class="school-name">INTEC ÉCOLE</div>
+        <div class="school-sub">Système de gestion des bulletins scolaires</div>
+        <div class="bulletin-title">Bilan des Acquisitions</div>
+        <div class="annee-label">
+          Année scolaire : 2025-2026
+          <span class="period-tag">1er Trimestre</span>
+        </div>
+      </td>
+      <td class="header-logo-cell">
+        
+        <div style="width:58px;height:58px;border:2px solid rgba(255,255,255,.3);border-radius:6px;background:white;display:table-cell;vertical-align:middle;text-align:center;">
+          <span style="font-size:16pt;">📋</span>
+        </div>
+      </td>
+    </tr>
+  </table>
+</div>
+
+
+<div class="info-band">
+  <table class="info-table">
+    <tr>
+      <td><span class="info-label">Élève :</span> Mawada Moussa Aden</td>
+      <td><span class="info-label">Matricule :</span> GSA26017</td>
+      <td><span class="info-label">Date de naissance :</span> —</td>
+    </tr>
+    <tr>
+      <td><span class="info-label">Classe :</span> Grande Section A</td>
+      <td><span class="info-label">Section :</span> A</td>
+      <td><span class="info-label">Enseignant(e) :</span> —</td>
+    </tr>
+  </table>
+</div>
+
+
+<div class="legend-box">
+  <div class="legend-title">Grille d'évaluation</div>
+  <table class="legend-table">
+    <thead>
+      <tr>
+        <th>Sigle</th>
+        <th>Signification</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="badge-a">A</span></td>
+        <td>Acquis</td>
+        <td style="text-align:left">L'enfant maîtrise et réussit souvent la compétence de façon autonome.</td>
+      </tr>
+      <tr>
+        <td><span class="badge-eva">EVA</span></td>
+        <td>En voie d'acquisition</td>
+        <td style="text-align:left">L'enfant est en cours d'apprentissage, des progrès sont visibles.</td>
+      </tr>
+      <tr>
+        <td><span class="badge-na">NA</span></td>
+        <td>Non acquis</td>
+        <td style="text-align:left">La compétence n'est pas encore maîtrisée, un accompagnement est nécessaire.</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+
+<div class="section-wrap">
+  <div class="section-head">LANGAGE ORAL</div>
+  <table class="comp">
+    <thead>
+      <tr>
+        <th class="desc" style="width:58%">Compétences / Objectifs</th>
+        <th style="width:14%">1er Trimestre</th>
+        <th style="width:14%">2ème Trimestre</th>
+        <th style="width:14%">3ème Trimestre</th>
+      </tr>
+    </thead>
+    <tbody>
+            <tr>
+        <td>
+          <span class="comp-code">C1</span>
+          — Percevoir les liens entre des objets et leur utilité.
+        </td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C2</span>
+          — Identifier et nommer des objets : les affaires scolaires.
+        </td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C3</span>
+          — Identifier et nommer les membres de la famille : le papa, la maman.
+        </td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C4</span>
+          — Reconnaître les bâtiments de l&#039;école.
+        </td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C5</span>
+          — Identifier et nommer les membres de son corps
+        </td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C6</span>
+          — Nommer et décrire des vêtements.
+        </td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C7</span>
+          — Identifi er et nommer les fruits et les légumes
+        </td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C8</span>
+          — Identifier et nommer les fruits et les légumes
+        </td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C9</span>
+          — Saluer et prendre congé .
+        </td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C10</span>
+          — Identifier le personnel de la ferme .
+        </td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C11</span>
+          — Nommer et décrire les animaux familiers .
+        </td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C12</span>
+          — Reconnaître les bâtiments de la ferme .
+        </td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C13</span>
+          — Identifier et nommer les animaux sauvage .
+        </td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C14</span>
+          — Décrire et comparer quelques animaux sauvage .
+        </td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C15</span>
+          — Situer dans l&#039;espace
+        </td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+          </tbody>
+  </table>
+</div>
+<div class="section-wrap">
+  <div class="section-head">GRAPHISME / ECRITURE</div>
+  <table class="comp">
+    <thead>
+      <tr>
+        <th class="desc" style="width:58%">Compétences / Objectifs</th>
+        <th style="width:14%">1er Trimestre</th>
+        <th style="width:14%">2ème Trimestre</th>
+        <th style="width:14%">3ème Trimestre</th>
+      </tr>
+    </thead>
+    <tbody>
+            <tr>
+        <td>
+          <span class="comp-code">C1</span>
+          — Tracer des lignes horizontales
+        </td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C2</span>
+          — Tracer des lignes verticales
+        </td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C3</span>
+          — Tracer des lignes obliques
+        </td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C4</span>
+          — Tracer des boucles
+        </td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C5</span>
+          — Tracer des ponts
+        </td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C6</span>
+          — Calligraphe correctement la lettre (a,o,i,o,u,m,r,t,p )
+        </td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C7</span>
+          — Calligraphe correctement la lettre (g,b , j et s)
+        </td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+          </tbody>
+  </table>
+</div>
+<div class="section-wrap">
+  <div class="section-head">LOGICO MATHS</div>
+  <table class="comp">
+    <thead>
+      <tr>
+        <th class="desc" style="width:58%">Compétences / Objectifs</th>
+        <th style="width:14%">1er Trimestre</th>
+        <th style="width:14%">2ème Trimestre</th>
+        <th style="width:14%">3ème Trimestre</th>
+      </tr>
+    </thead>
+    <tbody>
+            <tr>
+        <td>
+          <span class="comp-code">C1</span>
+          — Sur, sous
+        </td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C2</span>
+          — Je reconnais les formes
+        </td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C3</span>
+          — Plus de… que… Moins de… que
+        </td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C4</span>
+          — Les nombres 1, 2 et 3(1)
+        </td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C5</span>
+          — Avant – Après ..
+        </td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C6</span>
+          — Devant – Derrière(1
+        </td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C7</span>
+          — Les nombres 1, 2 et 3(2)
+        </td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C8</span>
+          — Les nombres 1, 2, 3 et 4
+        </td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C9</span>
+          — Les nombres de 1à7
+        </td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C10</span>
+          — Classement des aliments
+        </td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C11</span>
+          — Comparer les quantités
+        </td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C12</span>
+          — Situations additive
+        </td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C13</span>
+          — Les animaux de la ferme
+        </td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C14</span>
+          — Les petits animaux
+        </td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C15</span>
+          — Le gout
+        </td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C16</span>
+          — Près de , loin de ,…..
+        </td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+          </tbody>
+  </table>
+</div>
+<div class="section-wrap">
+  <div class="section-head">VIVRE ENSEMBLE</div>
+  <table class="comp">
+    <thead>
+      <tr>
+        <th class="desc" style="width:58%">Compétences / Objectifs</th>
+        <th style="width:14%">1er Trimestre</th>
+        <th style="width:14%">2ème Trimestre</th>
+        <th style="width:14%">3ème Trimestre</th>
+      </tr>
+    </thead>
+    <tbody>
+            <tr>
+        <td>
+          <span class="comp-code">C1</span>
+          — Sensibiliser au respect de l&#039;ordre et au rangement de la classe
+        </td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C2</span>
+          — Sensibiliser au respect de la ponctualité et du savoir-vivre.
+        </td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C3</span>
+          — Sensibiliser au respect de la propreté.
+        </td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C4</span>
+          — Sensibiliser à l&#039;importance d&#039;une alimentation équilibrée.
+        </td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C5</span>
+          — EDUCATION ISLAMIQUE
+        </td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C6</span>
+          — Sensibiliser au respect de la nature .
+        </td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C7</span>
+          — Sensibiliser au respect du règlement
+        </td>
+        <td class="center"><span class="badge-dash">—</span></td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+          </tbody>
+  </table>
+</div>
+<div class="section-wrap">
+  <div class="section-head">EVEIL ARTISTIQUE</div>
+  <table class="comp">
+    <thead>
+      <tr>
+        <th class="desc" style="width:58%">Compétences / Objectifs</th>
+        <th style="width:14%">1er Trimestre</th>
+        <th style="width:14%">2ème Trimestre</th>
+        <th style="width:14%">3ème Trimestre</th>
+      </tr>
+    </thead>
+    <tbody>
+            <tr>
+        <td>
+          <span class="comp-code">C1</span>
+          — Discriminer et produire des sons d&#039;intensité variables: fort, faible
+        </td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+            <tr>
+        <td>
+          <span class="comp-code">C2</span>
+          — Dessiner selon un modèle
+        </td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-a">A</span></td>
+        <td class="center"><span class="badge-dash">—</span></td>
+      </tr>
+          </tbody>
+  </table>
+</div>
+
+
+<div class="comment-area">
+  <div class="comment-label">Observation de l'enseignant(e) :</div>
+  <div class="comment-box">Élève serieuse. Elle participe activement et maintient un excellent niveau tout au long des apprentissages.</div>
+</div>
+
+<div class="comment-area">
+  <div class="comment-label" style="color:#b45309;">Mot de la Direction :</div>
+  <div class="comment-box comment-dir"></div>
+</div>
+
+
+<div class="sig-section">
+  <table class="sig-table">
+    <tr>
+      <td style="width:33%;padding-right:6px;">
+        <div class="sig-box">
+          <div class="sig-title">Signature de l'enseignant(e)</div>
+        </div>
+      </td>
+      <td style="width:33%;padding:0 3px;">
+        <div class="sig-box">
+          <div class="sig-title">Cachet et signature de la Direction</div>
+        </div>
+      </td>
+      <td style="width:33%;padding-left:6px;">
+        <div class="sig-box">
+          <div class="sig-title">Signature des parents / tuteurs</div>
+        </div>
+      </td>
+    </tr>
+  </table>
+</div>
+
+</body>
+</html>

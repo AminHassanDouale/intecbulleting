@@ -36,10 +36,11 @@ use Maatwebsite\Excel\Concerns\WithStartRow;
  */
 class GradeSheetImport implements ToArray, WithStartRow
 {
-    public int   $imported = 0;
-    public int   $skipped  = 0;
-    public int   $updated  = 0;
-    public array $errors   = [];
+    public int   $imported    = 0;
+    public int   $skipped     = 0;
+    public int   $updated     = 0;
+    public int   $gradesTotal = 0;
+    public array $errors      = [];
 
     private Collection $subjects;
 
@@ -143,6 +144,19 @@ class GradeSheetImport implements ToArray, WithStartRow
             'map'     => $this->columnMap,
         ]);
 
+        if (empty($this->columnMap)) {
+            $knownSubjects = implode(', ', array_unique(array_map(
+                fn($k) => explode('::', $k)[0],
+                array_keys($this->competenceMap)
+            )));
+            $this->errors[] = 'Aucune colonne de notes reconnue dans le fichier. '
+                . ($knownSubjects ? "Matières attendues : {$knownSubjects}." : 'Aucune matière trouvée pour ce niveau/classe.');
+            Log::error('GradeSheetImport: empty column map', [
+                'competenceMap_keys' => array_keys($this->competenceMap),
+            ]);
+            return;
+        }
+
         // ── Step 3: Find data start (first row after headers with a matricule) ─
         $dataStartIndex = null;
         for ($i = $competenceCodeRowIndex + 1; $i < count($allRows); $i++) {
@@ -196,6 +210,7 @@ class GradeSheetImport implements ToArray, WithStartRow
         Log::info('GradeSheetImport: Completed', [
             'imported'     => $this->imported,
             'skipped'      => $this->skipped,
+            'grades_total' => $this->gradesTotal,
             'errors_count' => count($this->errors),
         ]);
     }
@@ -294,7 +309,8 @@ class GradeSheetImport implements ToArray, WithStartRow
             }
 
             DB::commit();
-            $gradesProcessed > 0 ? $this->imported++ : $this->skipped++;
+            $this->imported++;
+            $this->gradesTotal += $gradesProcessed;
 
         } catch (\Throwable $e) {
             DB::rollBack();
@@ -356,10 +372,11 @@ class GradeSheetImport implements ToArray, WithStartRow
     public function getStats(): array
     {
         return [
-            'imported' => $this->imported,
-            'skipped'  => $this->skipped,
-            'updated'  => $this->updated,
-            'errors'   => $this->errors,
+            'imported'    => $this->imported,
+            'skipped'     => $this->skipped,
+            'updated'     => $this->updated,
+            'gradesTotal' => $this->gradesTotal,
+            'errors'      => $this->errors,
         ];
     }
 }

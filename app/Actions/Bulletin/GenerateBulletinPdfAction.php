@@ -25,7 +25,7 @@ class GenerateBulletinPdfAction
         $data = ['bulletin' => $bulletin];
 
         // For prescolaire, pass all 3 trimester bulletins so the template can show the full year
-        if ($niveauCode === AcademicLevelEnum::PRESCOLAIRE->value) {
+        if ($view === 'pdf.bulletin-prescolaire') {
             $base = [
                 'student_id'       => $bulletin->student_id,
                 'classroom_id'     => $bulletin->classroom_id,
@@ -62,10 +62,15 @@ class GenerateBulletinPdfAction
 
     private function resolveTemplate(string $niveauCode): string
     {
-        return match($niveauCode) {
-            AcademicLevelEnum::PRESCOLAIRE->value => 'pdf.bulletin-prescolaire',
-            AcademicLevelEnum::PRIMAIRE->value    => 'pdf.bulletin-primaire',
-            default                               => 'pdf.bulletin-college-lycee',
-        };
+        $prescolaireCodes = ['PS', 'MS', 'GS'];
+        $primaireCodes    = ['CP', 'CE1', 'CE2', 'CM1', 'CM2'];
+
+        if (in_array(strtoupper($niveauCode), $prescolaireCodes)) {
+            return 'pdf.bulletin-prescolaire';
+        }
+        if (in_array(strtoupper($niveauCode), $primaireCodes)) {
+            return 'pdf.bulletin-primaire';
+        }
+        return 'pdf.bulletin-college-lycee';
     }
 }
