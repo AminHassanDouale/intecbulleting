@@ -39,7 +39,7 @@ class RolesAndUsersSeeder extends Seeder
             ],
             [
                 'name'     => 'Directeur Général',
-                'email'    => 'direction@intec.edu',
+                'email'    => 'direction@intec.org',
                 'password' => Hash::make('password'),
                 'role'     => 'direction',
             ],

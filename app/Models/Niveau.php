@@ -6,7 +6,11 @@ use Illuminate\Database\Eloquent\Model;
 
 class Niveau extends Model
 {
-    protected $fillable = ['code', 'label', 'cycle'];
+    protected $fillable = ['code', 'label', 'cycle', 'order'];
+
+    protected $casts = [
+        'order' => 'integer',
+    ];
 
     public function classrooms()
     {

@@ -109,7 +109,10 @@ new #[Layout('components.layouts.app')] class extends Component {
                 $q->whereHas('classroom', fn($cq) => $cq->where('section', $this->filterSection))
             )
             ->when($this->filterNiveau, fn($q) =>
-                $q->whereHas('classroom.niveau', fn($nq) => $nq->where('code', $this->filterNiveau))
+                $q->whereHas('classroom.niveau', fn($nq) => $this->filterNiveau === 'PRESCOLAIRE'
+                    ? $nq->where('cycle', 'like', '%scolaire%')
+                    : $nq->where('cycle', 'like', '%rimaire%')
+                )
             )
             ->when($this->filterEmpty, fn($q) => $q->doesntHave('grades'));
 
@@ -626,8 +629,8 @@ new #[Layout('components.layouts.app')] class extends Component {
         // Niveau tab counts
         $niveauCounts = [
             ''           => (clone $base)->count(),
-            'PRESCOLAIRE'=> (clone $base)->whereHas('classroom.niveau', fn($q) => $q->where('code', 'PRESCOLAIRE'))->count(),
-            'PRIMAIRE'   => (clone $base)->whereHas('classroom.niveau', fn($q) => $q->where('code', 'PRIMAIRE'))->count(),
+            'PRESCOLAIRE'=> (clone $base)->whereHas('classroom.niveau', fn($q) => $q->where('cycle', 'like', '%scolaire%'))->count(),
+            'PRIMAIRE'   => (clone $base)->whereHas('classroom.niveau', fn($q) => $q->where('cycle', 'like', '%rimaire%'))->count(),
         ];
 
         return [
@@ -913,8 +916,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                                         <span class="text-base-content/40 text-xs">§{{ $bulletin->classroom->section }}</span>
                                     </span>
                                     @if($bulletin->classroom->niveau)
-                                    <span class="badge badge-xs {{ $bulletin->classroom->niveau->code === 'PRESCOLAIRE' ? 'badge-warning' : 'badge-info' }} w-fit">
-                                        {{ $bulletin->classroom->niveau->code === 'PRESCOLAIRE' ? '🌱 Préscolaire' : '📚 Primaire' }}
+                                    @php $isNiveauPres = mb_stripos($bulletin->classroom->niveau->cycle ?? '', 'scolaire') !== false; @endphp
+                                    <span class="badge badge-xs {{ $isNiveauPres ? 'badge-warning' : 'badge-info' }} w-fit">
+                                        {{ $isNiveauPres ? '🌱 Préscolaire' : '📚 Primaire' }}
                                     </span>
                                     @endif
                                 </div>

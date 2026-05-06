@@ -10,8 +10,15 @@ use Maatwebsite\Excel\Concerns\WithMultipleSheets;
  * Multi-sheet export for direction/admin.
  *
  * Produces one sheet per teacher assigned to the classroom (using that
- * teacher's subjects only), plus a final "Toutes matières" sheet with
- * every subject for the level — identical format to a regular GradeSheetExport.
+ * teacher's subjects only), plus a final sheet with every subject for the
+ * level — all using the same GradeSheetExport format that mirrors the real
+ * "Extraction CPB" template:
+ *
+ *   Row 1  → CARNET INTEC PRIMAIRE - CLASSE {label} - {year}
+ *   Row 2  → PÉRIODE N (Trimestre N)
+ *   Row 3  → Subject names (merged per subject group)
+ *   Row 4  → Competence labels  (Matricule / Nom Complet / Date Naissance / CB1 / …)
+ *   Row 5+ → Student data
  */
 class GradeSheetDirectorExport implements WithMultipleSheets
 {
@@ -27,6 +34,7 @@ class GradeSheetDirectorExport implements WithMultipleSheets
         $classroom = Classroom::with('teachers')->findOrFail($this->classroomId);
         $sheets    = [];
 
+        // One sheet per assigned teacher (their subjects only)
         foreach ($classroom->teachers as $teacher) {
             $sheets[] = new GradeSheetExport(
                 $this->classroomId,

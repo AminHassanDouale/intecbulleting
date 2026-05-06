@@ -98,7 +98,7 @@ new #[Layout('components.layouts.print')] class extends Component {
                         $status   = $ratio >= 0.667 ? 'A' : ($ratio >= 0.333 ? 'EVA' : 'NA');
 
                         $statusMap[$p][$competence->id]    = $status;
-                        $scoreDisplay[$p][$competence->id] = number_format($score, 1) . '/' . (int) $maxScore;
+                        $scoreDisplay[$p][$competence->id] = rtrim(rtrim(number_format($score, 2, '.', ''), '0'), '.') . '/' . (int) $maxScore;
                     } else {
                         $statusMap[$p][$competence->id]    = null;
                         $scoreDisplay[$p][$competence->id] = '';
@@ -278,12 +278,13 @@ new #[Layout('components.layouts.print')] class extends Component {
 }; ?>
 
 @php
-$isPrescolaire = str_contains(strtoupper($student->classroom->niveau->code ?? ''), 'PRES');
+$isPrescolaire = mb_stripos($student->classroom->niveau->cycle ?? '', 'scolaire') !== false;
 $classCode     = $student->classroom->code ?? '—';
 $classSection  = $student->classroom->section ?? '';
 $niveauLabel   = $student->classroom->niveau->code ?? '';
 @endphp
 
+<div>
 @if($isPrescolaire)
 {{-- ══════════════════════════════════════════════════════════════
      PRÉSCOLAIRE — Format A4 paysage recto-verso (1 feuille)
@@ -389,10 +390,8 @@ $_psTeacherName = $student->classroom->teacher?->name ?? '—';
     <div class="ps-panel ps-left">
       <div class="ps-cover">
         <div class="ps-sch-row">
-          <div class="ps-logo">
-            <div class="ps-logo-t"><div class="ps-li">in</div><div class="ps-lt">TEC</div></div>
-            <div class="ps-lb">É C O L E</div>
-          </div>
+          <img src="{{ asset('images/in tech.jpg') }}" alt="INTEC"
+               style="width:22mm;height:22mm;object-fit:contain;flex-shrink:0;border-radius:3px;">
           <div class="ps-sch-blk">
             <div class="ps-sch-nm">École internationale</div>
             <div class="ps-sch-tag"><em>pour</em> les langues et les technologies</div>
@@ -405,10 +404,8 @@ $_psTeacherName = $student->classroom->teacher?->name ?? '—';
         <div class="ps-gs-ttl">{{ strtoupper($_psNiveauLabel) }}</div>
 
         <div class="ps-cbox">
-          <div style="text-align:center;">
-            <div style="font-size:42pt;line-height:1;">🏫</div>
-            <div style="font-size:7pt;color:#666;margin-top:1mm;">Salle de classe préscolaire inTEC</div>
-          </div>
+          <img src="{{ asset('images/in tech.jpg') }}" alt="INTEC"
+               style="width:36mm;height:36mm;object-fit:contain;border-radius:5px;">
         </div>
 
         <div class="ps-info">
@@ -477,10 +474,8 @@ $_psTeacherName = $student->classroom->teacher?->name ?? '—';
     <div class="ps-panel ps-left" style="display:flex;flex-direction:column;">
 
       <div style="text-align:center;margin-bottom:2mm;">
-        <div class="ps-logo" style="display:inline-block;">
-          <div class="ps-logo-t"><div class="ps-li">in</div><div class="ps-lt">TEC</div></div>
-          <div class="ps-lb">É C O L E</div>
-        </div>
+        <img src="{{ asset('images/in tech.jpg') }}" alt="INTEC"
+             style="width:18mm;height:18mm;object-fit:contain;border-radius:3px;">
       </div>
 
       <div style="text-align:center;font-size:8pt;font-weight:700;text-transform:uppercase;border-bottom:2px solid #6B5000;padding-bottom:1.5mm;margin-bottom:2mm;">
@@ -760,13 +755,8 @@ $nextClassCode = \App\Models\StudentPromotion::nextClassCode($classCode);
 
             <p class="bk-republic">REPUBLIQUE DE DJIBOUTI</p>
 
-            <div class="bk-logo">
-                <div class="bk-logo-top">
-                    <div class="bk-logo-in">in</div>
-                    <div class="bk-logo-tec">TEC</div>
-                </div>
-                <div class="bk-logo-bot">É C O L E</div>
-            </div>
+            <img src="{{ asset('images/in tech.jpg') }}" alt="INTEC"
+                 style="width:38mm;height:38mm;object-fit:contain;border-radius:6px;margin-bottom:3mm;">
 
             <p class="bk-cov-school">{{ strtoupper($schoolName) }}</p>
             <p class="bk-cov-carnet">CARNET D'EVALUATION</p>
@@ -836,11 +826,12 @@ $nextClassCode = \App\Models\StudentPromotion::nextClassCode($classCode);
                     @foreach(['T1','T2','T3'] as $_p)
                     @php
                         $grade    = $gradesMap[$_p][$competence->id] ?? null;
-                        $numScore = $grade && $grade->score !== null ? number_format((float)$grade->score, 1) : null;
+                        $numScore = $grade && $grade->score !== null ? rtrim(rtrim(number_format((float)$grade->score, 2, '.', ''), '0'), '.') : null;
                         $stChar   = $statusMap[$_p][$competence->id] ?? null;
-                        $cellA    = $numScore ?? ($stChar === 'A'   ? 'A'   : '');
-                        $cellEVA  = $numScore  ? '' : ($stChar === 'EVA' ? 'EVA' : '');
-                        $cellNA   = $numScore  ? '' : ($stChar === 'NA'  ? 'NA'  : '');
+                        $display  = $numScore ?? ($stChar ?? '');
+                        $cellA    = $stChar === 'A'   ? $display : '';
+                        $cellEVA  = $stChar === 'EVA' ? $display : '';
+                        $cellNA   = $stChar === 'NA'  ? $display : '';
                     @endphp
                     <td class="bk-p">{{ $cellA }}</td>
                     <td class="bk-aen">{{ $cellEVA }}</td>
@@ -883,11 +874,12 @@ $nextClassCode = \App\Models\StudentPromotion::nextClassCode($classCode);
                     @foreach(['T1','T2','T3'] as $_p)
                     @php
                         $grade    = $gradesMap[$_p][$competence->id] ?? null;
-                        $numScore = $grade && $grade->score !== null ? number_format((float)$grade->score, 1) : null;
+                        $numScore = $grade && $grade->score !== null ? rtrim(rtrim(number_format((float)$grade->score, 2, '.', ''), '0'), '.') : null;
                         $stChar   = $statusMap[$_p][$competence->id] ?? null;
-                        $cellA    = $numScore ?? ($stChar === 'A'   ? 'A'   : '');
-                        $cellEVA  = $numScore  ? '' : ($stChar === 'EVA' ? 'EVA' : '');
-                        $cellNA   = $numScore  ? '' : ($stChar === 'NA'  ? 'NA'  : '');
+                        $display  = $numScore ?? ($stChar ?? '');
+                        $cellA    = $stChar === 'A'   ? $display : '';
+                        $cellEVA  = $stChar === 'EVA' ? $display : '';
+                        $cellNA   = $stChar === 'NA'  ? $display : '';
                     @endphp
                     <td class="bk-p">{{ $cellA }}</td>
                     <td class="bk-aen">{{ $cellEVA }}</td>
@@ -950,3 +942,4 @@ $nextClassCode = \App\Models\StudentPromotion::nextClassCode($classCode);
 </div>{{-- /bk-wrap --}}
 
 @endif
+</div>

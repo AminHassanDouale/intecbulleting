@@ -6,20 +6,6 @@
     <title>{{ isset($title) ? $title . ' — INTEC École' : config('app.name', 'INTEC École') }}</title>
     <link rel="icon" type="image/jpeg" href="{{ asset('images/in tech.jpg') }}">
 
-    {{-- Restore saved theme before CSS loads --}}
-    <script>
-        (function () {
-            var v = '4', t = 'light';
-            if (localStorage.getItem('intec-theme-v') === v) {
-                t = localStorage.getItem('intec-theme') || 'light';
-            } else {
-                localStorage.setItem('intec-theme', 'light');
-                localStorage.setItem('intec-theme-v', v);
-            }
-            document.documentElement.setAttribute('data-theme', t);
-        })();
-    </script>
-
     @vite(['resources/css/app.css', 'resources/js/app.js'])
     @livewireStyles
 
@@ -29,12 +15,6 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700&family=Figtree:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
 
-    <style>
-        /* theme icon toggle */
-        #icon-sun  { display: none; }
-        [data-theme="dark"] #icon-moon { display: none; }
-        [data-theme="dark"] #icon-sun  { display: block; }
-    </style>
 </head>
 <body class="min-h-screen font-sans antialiased bg-base-200">
 
@@ -219,13 +199,6 @@
                 </div>
             </div>
 
-            {{-- Theme toggle --}}
-            <button onclick="toggleTheme()" title="Basculer thème clair/sombre"
-                class="btn btn-ghost btn-circle btn-sm">
-                <x-icon id="icon-moon" name="o-moon" class="w-5 h-5" />
-                <x-icon id="icon-sun"  name="o-sun"  class="w-5 h-5" />
-            </button>
-
             {{-- Divider --}}
             <div class="w-px h-6 bg-base-300"></div>
 
@@ -280,17 +253,6 @@
 
 <x-toast />
 
-<script>
-    function toggleTheme() {
-        var next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
-        document.documentElement.setAttribute('data-theme', next);
-        localStorage.setItem('intec-theme', next);
-    }
-    document.addEventListener('livewire:navigated', function () {
-        var t = localStorage.getItem('intec-theme') || 'light';
-        document.documentElement.setAttribute('data-theme', t);
-    });
-</script>
 
 @livewireScripts
 </body>

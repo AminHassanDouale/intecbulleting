@@ -9,7 +9,7 @@
 @source '../../vendor/robsontenorio/mary/src/View/Components/**/*.php';
 
 @plugin "daisyui" {
-    themes: ["light", "dark"];
+    themes: ["light"];
 }
 
 @theme {
@@ -51,40 +51,6 @@
     --color-info-content:      oklch(100% 0 0);
 }
 
-/* ── INTEC Dark Theme ──────────────────────────────────────────────────────── */
-[data-theme="dark"] {
-    /* Primary: lighter teal for dark bg */
-    --color-primary:           oklch(76% 0.105 192);
-    --color-primary-content:   oklch(16% 0.03  196);
-
-    /* Secondary: gold */
-    --color-secondary:         oklch(72% 0.127 67);
-    --color-secondary-content: oklch(16% 0.03  67);
-
-    /* Accent */
-    --color-accent:            oklch(63% 0.123 67);
-    --color-accent-content:    oklch(100% 0 0);
-
-    /* Neutrals */
-    --color-neutral:           oklch(38% 0.01 260);
-    --color-neutral-content:   oklch(96% 0.005 240);
-
-    /* Bases */
-    --color-base-100:          oklch(17% 0.012 265);
-    --color-base-200:          oklch(22% 0.012 265);
-    --color-base-300:          oklch(27% 0.012 265);
-    --color-base-content:      oklch(88% 0.008 260);
-
-    /* Status */
-    --color-error:             oklch(64.76% 0.2192 27.32);
-    --color-error-content:     oklch(100% 0 0);
-    --color-success:           oklch(66.52% 0.1895 149.58);
-    --color-success-content:   oklch(100% 0 0);
-    --color-warning:           oklch(82% 0.1673 66.29);
-    --color-warning-content:   oklch(15% 0 0);
-    --color-info:              oklch(68% 0.1800 264.05);
-    --color-info-content:      oklch(100% 0 0);
-}
 
 /* ── Grade colors ──────────────────────────────────────────────────────────── */
 .grade-a { color: oklch(54.58% 0.2030 149.58); font-weight: 700; }

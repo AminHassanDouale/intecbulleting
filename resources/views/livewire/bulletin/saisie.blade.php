@@ -7,6 +7,7 @@ use App\Enums\BulletinStatusEnum;
 use App\Enums\CompetenceStatusEnum;
 use App\Enums\PeriodEnum;
 use App\Exports\GradeSheetExport;
+use App\Exports\GradeSheetDirectorExport;
 use App\Imports\GradeSheetImport;
 use App\Models\AcademicYear;
 use App\Models\Bulletin;
@@ -35,8 +36,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     public ?int    $bulletinId       = null;
     public array   $grades           = [];
     public string  $teacherComment   = '';
-    public $importFile    = null;
-    public $importFileCsv = null;
+    public $importFile = null;
 
     // ─────────────────────────────────────────────────────────────────────────
 
@@ -134,7 +134,6 @@ new #[Layout('components.layouts.app')] class extends Component {
             $bulletin->update(['teacher_comment' => $this->teacherComment]);
         }
 
-        // Direction/admin: bypass entire workflow — mark bulletin APPROVED immediately.
         if ($isDirection) {
             $now = now();
             $uid = auth()->id();
@@ -250,118 +249,31 @@ new #[Layout('components.layouts.app')] class extends Component {
             return null;
         }
 
-        // Direction/admin get teacherId=null → all subjects on one sheet.
-        // Teachers get their own teacherId → only their subjects.
-        $export = new GradeSheetExport(
-            $this->selectedClassroom,
-            $this->selectedPeriod,
-            $this->selectedYear,
-            $this->selectedNiveau,
-            $this->getTeacherIdForExportImport()
-        );
+        $isDirection = auth()->user()->hasAnyRole(['admin', 'direction']);
+
+        // Direction gets a multi-sheet file (one per teacher + one with all subjects)
+        if ($isDirection) {
+            $export = new GradeSheetDirectorExport(
+                $this->selectedClassroom,
+                $this->selectedPeriod,
+                $this->selectedYear,
+                $this->selectedNiveau,
+            );
+        } else {
+            // Teachers only see their own subjects on a single sheet
+            $export = new GradeSheetExport(
+                $this->selectedClassroom,
+                $this->selectedPeriod,
+                $this->selectedYear,
+                $this->selectedNiveau,
+                $this->getTeacherIdForExportImport()
+            );
+        }
 
         return Excel::download($export, $export->getFilename());
     }
 
-    // ── CSV export URL builder (used in template <a> tag) ────────────────────
-    // We do NOT use Livewire for the actual download — we build a plain URL
-    // to GradeSheetCSVController::export() so the browser downloads a real
-    // .csv file without Livewire/Maatwebsite interfering.
-
-    public function getCsvExportUrl(): string
-    {
-        if (! $this->selectedClassroom || ! $this->selectedPeriod || ! $this->selectedYear || ! $this->selectedNiveau) {
-            return '#';
-        }
-
-        $params = [
-            'classroom_id'     => $this->selectedClassroom,
-            'period'           => $this->selectedPeriod,
-            'academic_year_id' => $this->selectedYear,
-            'niveau_code'      => $this->selectedNiveau,
-        ];
-
-        return route('grades.export-csv', $params);
-    }
-
-    // ── CSV import ────────────────────────────────────────────────────────────
-
-    public function importGradesCSV(): void
-    {
-        if (! $this->selectedClassroom || ! $this->selectedPeriod || ! $this->selectedYear || ! $this->selectedNiveau) {
-            $this->error('Sélection incomplète.', icon: 'o-exclamation-circle', position: 'toast-top toast-end');
-            return;
-        }
-
-        if (! $this->importFileCsv) {
-            $this->error('Fichier manquant.', 'Veuillez sélectionner un fichier CSV.', icon: 'o-exclamation-circle', position: 'toast-top toast-end');
-            return;
-        }
-
-        // Lock check
-        if ($this->shouldFilterByTeacher()) {
-            $totalStudents = Student::where('classroom_id', $this->selectedClassroom)->count();
-
-            if ($totalStudents > 0) {
-                $submittedCount = Bulletin::where('classroom_id', $this->selectedClassroom)
-                    ->where('academic_year_id', $this->selectedYear)
-                    ->where('period', $this->selectedPeriod)
-                    ->whereHas('teacherSubmissions', fn($q) => $q->where('teacher_id', auth()->id())->where('status', 'submitted'))
-                    ->count();
-
-                if ($submittedCount === $totalStudents) {
-                    $anyBeyondDraft = Bulletin::where('classroom_id', $this->selectedClassroom)
-                        ->where('academic_year_id', $this->selectedYear)
-                        ->where('period', $this->selectedPeriod)
-                        ->where('status', '!=', BulletinStatusEnum::DRAFT)
-                        ->exists();
-
-                    if ($anyBeyondDraft) {
-                        $this->error('Import verrouillé.', 'Vous avez déjà soumis vos notes pour cette période.', icon: 'o-lock-closed', position: 'toast-top toast-end');
-                        return;
-                    }
-                }
-            }
-        }
-
-        $importer = new \App\Imports\GradeSheetImportCSV(
-            $this->selectedClassroom,
-            $this->selectedPeriod,
-            $this->selectedYear,
-            $this->selectedNiveau,
-            $this->getTeacherIdForExportImport()
-        );
-
-        try {
-            $stored   = $this->importFileCsv->store('grade-imports', 'local');
-            $fullPath = \Illuminate\Support\Facades\Storage::disk('local')->path($stored);
-
-            // Uses SplFileObject internally — NOT Maatwebsite\Excel
-            $importer->import($fullPath);
-
-            \Illuminate\Support\Facades\Storage::disk('local')->delete($stored);
-            $this->importFileCsv = null;
-
-            $stats   = $importer->getStats();
-            $message = "Import CSV réussi ! {$stats['imported']} élève(s) importé(s), {$stats['skipped']} ignoré(s).";
-
-            if (! empty($stats['errors'])) {
-                $this->warning($message, implode(' | ', array_slice($stats['errors'], 0, 3)), icon: 'o-exclamation-triangle', position: 'toast-top toast-end');
-            } else {
-                $this->success($message, icon: 'o-arrow-up-tray', position: 'toast-top toast-end');
-            }
-
-            if ($this->selectedStudent) {
-                $this->loadOrCreateBulletin($this->selectedStudent);
-            }
-
-        } catch (\Throwable $e) {
-            $this->error('Erreur import CSV', $e->getMessage(), icon: 'o-x-circle', position: 'toast-top toast-end');
-            \Illuminate\Support\Facades\Log::error('CSV Grade import error', ['message' => $e->getMessage(), 'classroom' => $this->selectedClassroom, 'period' => $this->selectedPeriod]);
-        }
-    }
-
-    // ── Excel import (unchanged) ──────────────────────────────────────────────
+    // ── Excel import ──────────────────────────────────────────────────────────
 
     public function importGrades(): void
     {
@@ -371,7 +283,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         }
 
         if (! $this->importFile) {
-            $this->error('Fichier manquant.', 'Veuillez sélectionner un fichier Excel.', icon: 'o-exclamation-circle', position: 'toast-top toast-end');
+            $this->error('Fichier manquant.', 'Veuillez sélectionner un fichier Excel (.xlsx).', icon: 'o-exclamation-circle', position: 'toast-top toast-end');
             return;
         }
 
@@ -393,7 +305,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         ->exists();
 
                     if ($anyBeyondDraft) {
-                        $this->error('Import verrouillé.', 'Vous avez déjà soumis vos notes pour cette période et les bulletins sont en cours de validation.', icon: 'o-lock-closed', position: 'toast-top toast-end');
+                        $this->error('Import verrouillé.', 'Vous avez déjà soumis vos notes et les bulletins sont en cours de validation.', icon: 'o-lock-closed', position: 'toast-top toast-end');
                         return;
                     }
                 }
@@ -402,7 +314,13 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         $isDirection = auth()->user()->hasAnyRole(['admin', 'direction']);
         $teacherId   = $this->getTeacherIdForExportImport();
-        $importer    = new GradeSheetImport($this->selectedClassroom, $this->selectedPeriod, $this->selectedYear, $this->selectedNiveau, $teacherId);
+        $importer    = new GradeSheetImport(
+            $this->selectedClassroom,
+            $this->selectedPeriod,
+            $this->selectedYear,
+            $this->selectedNiveau,
+            $teacherId
+        );
 
         try {
             $stored   = $this->importFile->store('grade-imports', 'local');
@@ -413,7 +331,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             \Illuminate\Support\Facades\Storage::disk('local')->delete($stored);
             $this->importFile = null;
 
-            // Direction/admin: bypass workflow — mark every imported bulletin APPROVED (if grades were actually saved)
+            // Direction/admin: auto-approve all imported bulletins
             if ($isDirection && $importer->gradesTotal > 0) {
                 $now = now();
                 $uid = auth()->id();
@@ -472,7 +390,12 @@ new #[Layout('components.layouts.app')] class extends Component {
             $this->error('Erreur de validation', implode(' | ', array_slice($errors, 0, 3)), icon: 'o-x-circle', position: 'toast-top toast-end');
         } catch (\Throwable $e) {
             $this->error('Erreur import', $e->getMessage(), icon: 'o-x-circle', position: 'toast-top toast-end');
-            \Log::error('Grade import error', ['message' => $e->getMessage(), 'classroom' => $this->selectedClassroom, 'period' => $this->selectedPeriod, 'teacher_id' => $teacherId]);
+            \Log::error('Grade import error', [
+                'message'    => $e->getMessage(),
+                'classroom'  => $this->selectedClassroom,
+                'period'     => $this->selectedPeriod,
+                'teacher_id' => $teacherId,
+            ]);
         }
     }
 
@@ -573,7 +496,6 @@ new #[Layout('components.layouts.app')] class extends Component {
                 $bulletin = Bulletin::with(['teacherSubmissions.teacher', 'approvals'])->find($this->bulletinId);
                 if ($bulletin) {
                     $canEdit          = $bulletin->canTeacherEdit(auth()->id());
-                    // Direction never enters the "submitted" read-only state — they can always re-edit
                     $teacherSubmitted = $isDirection ? false : $bulletin->isTeacherSubmitted(auth()->id());
                     $progress         = $bulletin->teacherSubmissionProgress();
                 }
@@ -587,7 +509,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         ) + [
             'periodOptions'     => PeriodEnum::options(),
             'competenceOptions' => CompetenceStatusEnum::options(),
-            'csvExportUrl'      => $this->getCsvExportUrl(),
+            'isDirection'       => $isDirection,
         ];
     }
 }; ?>
@@ -673,27 +595,47 @@ new #[Layout('components.layouts.app')] class extends Component {
         @endforeach
     </div>
 
-    {{-- Export / Import toolbar --}}
+    {{-- Export / Import toolbar (Excel only) --}}
     <div class="card bg-base-100 shadow">
-        <div class="card-body py-3 px-4 space-y-3">
+        <div class="card-body py-3 px-4">
+            <div class="flex flex-wrap items-end gap-3">
 
-            {{-- Row 1: Excel --}}
-            <div class="flex flex-wrap items-center gap-3">
-                <p class="font-semibold text-xs text-base-content/50 w-12 shrink-0">EXCEL</p>
+                {{-- Label --}}
+                <p class="font-semibold text-xs text-base-content/50 self-center w-12 shrink-0">EXCEL</p>
 
-                {{-- Export Excel --}}
-                <x-button label="⬇ Exporter" wire:click="exportGrades" class="btn-outline btn-sm" spinner="exportGrades" icon="o-arrow-down-tray" />
+                {{-- Export --}}
+                <x-button
+                    label="⬇ Exporter"
+                    wire:click="exportGrades"
+                    class="btn-outline btn-sm"
+                    spinner="exportGrades"
+                    icon="o-arrow-down-tray"
+                    tooltip="{{ $isDirection ? 'Export multi-feuilles (un onglet par enseignant + toutes matières)' : 'Exporter la feuille de notes' }}"
+                />
 
-                {{-- Import Excel --}}
+                {{-- Import --}}
                 <div class="flex items-end gap-2">
                     <div>
                         <label class="label-text text-xs mb-1 block">Fichier .xlsx</label>
-                        <input type="file" wire:model="importFile" accept=".xlsx,.xls" class="file-input file-input-sm file-input-bordered w-48" />
+                        <input
+                            type="file"
+                            wire:model="importFile"
+                            accept=".xlsx,.xls"
+                            class="file-input file-input-sm file-input-bordered w-48"
+                        />
                     </div>
-                    <x-button label="⬆ Importer" wire:click="importGrades" class="btn-primary btn-sm" spinner="importGrades" icon="o-arrow-up-tray" />
+                    <x-button
+                        label="⬆ Importer"
+                        wire:click="importGrades"
+                        class="btn-primary btn-sm"
+                        spinner="importGrades"
+                        icon="o-arrow-up-tray"
+                    />
                 </div>
 
-                <div class="border-l border-base-200 pl-3 ml-auto">
+                {{-- Bulk submit (teachers only) --}}
+                @unless($isDirection)
+                <div class="border-l border-base-200 pl-3 ml-auto self-end">
                     <x-button
                         label="✈ Tout soumettre"
                         wire:click="bulkSubmitMySubjects"
@@ -704,10 +646,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                         wire:confirm="Soumettre vos notes pour tous les élèves de {{ \App\Enums\PeriodEnum::from($selectedPeriod)->label() }} ?"
                     />
                 </div>
+                @endunless
+
             </div>
-
-
-
         </div>
     </div>
 
@@ -721,7 +662,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 
             <div class="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-base-200/40 transition-colors rounded-2xl" wire:click="selectStudent({{ $student->id }})">
                 <div class="w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm shrink-0 {{ $student->gender === 'M' ? 'bg-blue-100 text-blue-700' : 'bg-pink-100 text-pink-700' }}">
-                    {{ strtoupper(substr($student->full_name,0,1)) }}
+                    {{ strtoupper(substr($student->full_name, 0, 1)) }}
                 </div>
                 <div class="flex-1 min-w-0">
                     <p class="font-semibold text-sm truncate">{{ $student->full_name }}</p>
