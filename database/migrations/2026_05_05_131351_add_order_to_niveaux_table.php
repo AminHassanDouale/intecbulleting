@@ -8,11 +8,14 @@ return new class extends Migration
 {
     public function up(): void
     {
+        if (Schema::hasColumn('niveaux', 'order')) {
+            return;
+        }
+
         Schema::table('niveaux', function (Blueprint $table) {
             $table->unsignedSmallInteger('order')->default(0)->after('cycle');
         });
 
-        // Seed default order based on existing records
         DB::table('niveaux')->orderBy('id')->get()->each(function ($n, $i) {
             DB::table('niveaux')->where('id', $n->id)->update(['order' => $i + 1]);
         });
