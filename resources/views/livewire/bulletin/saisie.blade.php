@@ -251,7 +251,6 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         $isDirection = auth()->user()->hasAnyRole(['admin', 'direction']);
 
-        // Direction gets a multi-sheet file (one per teacher + one with all subjects)
         if ($isDirection) {
             $export = new GradeSheetDirectorExport(
                 $this->selectedClassroom,
@@ -260,7 +259,6 @@ new #[Layout('components.layouts.app')] class extends Component {
                 $this->selectedNiveau,
             );
         } else {
-            // Teachers only see their own subjects on a single sheet
             $export = new GradeSheetExport(
                 $this->selectedClassroom,
                 $this->selectedPeriod,
@@ -331,7 +329,6 @@ new #[Layout('components.layouts.app')] class extends Component {
             \Illuminate\Support\Facades\Storage::disk('local')->delete($stored);
             $this->importFile = null;
 
-            // Direction/admin: auto-approve all imported bulletins
             if ($isDirection && $importer->gradesTotal > 0) {
                 $now = now();
                 $uid = auth()->id();
@@ -430,6 +427,10 @@ new #[Layout('components.layouts.app')] class extends Component {
             $classrooms = $classroomQuery->get()->map(fn($c) => ['id' => $c->id, 'name' => $c->label . ' — ' . $c->section]);
         }
 
+        // ── Subjects: STRICTLY filtered by classroom code ─────────────────────
+        // Each class (CP, CE1, CE2, CM1, CM2…) only sees its own catalogue:
+        //   - Subjects with matching classroom_code
+        //   - Plus subjects with classroom_code = NULL (global for niveau)
         $subjects = collect();
         if ($this->selectedStudent && $this->selectedNiveau && $this->selectedClassroom) {
             $classCode = Classroom::find($this->selectedClassroom)?->code;

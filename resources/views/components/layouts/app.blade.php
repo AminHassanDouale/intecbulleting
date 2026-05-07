@@ -15,6 +15,10 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700&family=Figtree:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
 
+    {{-- Lock light mode: prevent OS dark-mode preference from overriding DaisyUI --}}
+    <style>
+        :root { color-scheme: light only; }
+    </style>
 </head>
 <body class="min-h-screen font-sans antialiased bg-base-200">
 
@@ -252,7 +256,6 @@
 </x-main>
 
 <x-toast />
-
 
 @livewireScripts
 </body>

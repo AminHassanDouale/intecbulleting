@@ -7,6 +7,11 @@
 
     @vite(['resources/css/app.css', 'resources/js/app.js'])
     @livewireStyles
+
+    {{-- Lock light mode: prevent OS dark-mode preference from overriding DaisyUI --}}
+    <style>
+        :root { color-scheme: light only; }
+    </style>
 </head>
 <body class="min-h-screen bg-base-200 font-sans">
 
