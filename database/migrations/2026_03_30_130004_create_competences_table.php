@@ -11,9 +11,10 @@ return new class extends Migration
         Schema::create('competences', function (Blueprint $table) {
             $table->id();
             $table->foreignId('subject_id')->constrained()->cascadeOnDelete();
+            $table->string('section_code', 10)->nullable()->index(); // NULL = applies to all sections
             $table->string('code');                     // CB1, CB2, CB3
             $table->text('description');
-            $table->integer('max_score')->nullable();   // null = A/EVA/NA
+            $table->integer('max_score')->nullable();   // null = A/EVA/NA (pooled)
             $table->string('period')->nullable();       // T1, T2, T3 ou null = tous
             $table->integer('order')->default(0);
             $table->timestamps();

@@ -14,160 +14,138 @@ use App\Models\User;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
 
+/**
+ * PrimaireSeeder
+ *
+ * ─── AUTHORITATIVE SOURCE ───────────────────────────────────────────────────
+ *   modele_import_enseignants.xlsx  (sheet: Import Enseignants)
+ *
+ * ─── TEACHERS (verbatim from Excel) ─────────────────────────────────────────
+ *   MARIAM YOUSSOUF BARREH    mariam.youssouf@intec.org    Intec@2026   CPA
+ *   SAMIRA OMAR YOUSSOUF      samira.omar@intec.org        Intec@2026   CPB
+ *   ABDOULAZIZ MAHDI OSMAN    abdoulaziz.mahdi@intec.org   Intec@2026   CE1A
+ *   FATHIA MOHAMED ILMY       fathia.mohamed@intec.org     Intec@2026   CE1B
+ *   Marwa Abdi                marwa.abdi@intec.org         Intec@2026   CE2A
+ *   KADRA ISMAN WAIS          kadra.isman@intec.org        Intec@2026   CE2B
+ *   AMINA OMAR SAMIREH        amina.omar@intec.org         Intec@2026   CM1A
+ *   RAHMA HOUSSEIN            rahma.houssein@intec.org     Intec@2026   CM2A
+ *
+ * ─── CLASSROOM MAPPING ──────────────────────────────────────────────────────
+ *   class_code → classroom_code (Subject FK) + section
+ *   CPA  → code=CP,  section=A
+ *   CPB  → code=CP,  section=B
+ *   CE1A → code=CE1, section=A
+ *   CE1B → code=CE1, section=B
+ *   CE2A → code=CE2, section=A
+ *   CE2B → code=CE2, section=B
+ *   CM1A → code=CM1, section=A
+ *   CM2A → code=CM2, section=A
+ */
 class PrimaireSeeder extends Seeder
 {
+    // ── Teacher data verbatim from Excel ──────────────────────────────────────
+    private array $teachers = [
+        [
+            'name'       => 'MARIAM YOUSSOUF BARREH',
+            'email'      => 'mariam.youssouf@intec.org',
+            'password'   => 'Intec@2026',
+            'class_code' => 'CPA',
+            'code'       => 'CP',
+            'section'    => 'A',
+            'label'      => 'CP A',
+        ],
+        [
+            'name'       => 'SAMIRA OMAR YOUSSOUF',
+            'email'      => 'samira.omar@intec.org',
+            'password'   => 'Intec@2026',
+            'class_code' => 'CPB',
+            'code'       => 'CP',
+            'section'    => 'B',
+            'label'      => 'CP B',
+        ],
+        [
+            'name'       => 'ABDOULAZIZ MAHDI OSMAN',
+            'email'      => 'abdoulaziz.mahdi@intec.org',
+            'password'   => 'Intec@2026',
+            'class_code' => 'CE1A',
+            'code'       => 'CE1',
+            'section'    => 'A',
+            'label'      => 'CE1 A',
+        ],
+        [
+            'name'       => 'FATHIA MOHAMED ILMY',
+            'email'      => 'fathia.mohamed@intec.org',
+            'password'   => 'Intec@2026',
+            'class_code' => 'CE1B',
+            'code'       => 'CE1',
+            'section'    => 'B',
+            'label'      => 'CE1 B',
+        ],
+        [
+            'name'       => 'Marwa Abdi',
+            'email'      => 'marwa.abdi@intec.org',
+            'password'   => 'Intec@2026',
+            'class_code' => 'CE2A',
+            'code'       => 'CE2',
+            'section'    => 'A',
+            'label'      => 'CE2 A',
+        ],
+        [
+            'name'       => 'KADRA ISMAN WAIS',
+            'email'      => 'kadra.isman@intec.org',
+            'password'   => 'Intec@2026',
+            'class_code' => 'CE2B',
+            'code'       => 'CE2',
+            'section'    => 'B',
+            'label'      => 'CE2 B',
+        ],
+        [
+            'name'       => 'AMINA OMAR SAMIREH',
+            'email'      => 'amina.omar@intec.org',
+            'password'   => 'Intec@2026',
+            'class_code' => 'CM1A',
+            'code'       => 'CM1',
+            'section'    => 'A',
+            'label'      => 'CM1 A',
+        ],
+        [
+            'name'       => 'RAHMA HOUSSEIN',
+            'email'      => 'rahma.houssein@intec.org',
+            'password'   => 'Intec@2026',
+            'class_code' => 'CM2A',
+            'code'       => 'CM2',
+            'section'    => 'A',
+            'label'      => 'CM2 A',
+        ],
+    ];
+
     public function run(): void
     {
-        $year  = AcademicYear::where('is_current', true)->firstOrFail();
+        $year   = AcademicYear::where('is_current', true)->firstOrFail();
         $niveau = Niveau::where('code', AcademicLevelEnum::PRIMAIRE->value)->firstOrFail();
 
-        // ── 3 enseignants primaire ────────────────────────────────────────────
-        $teachers = [
-            [
-                'email' => 'prof.diallo@intec.edu',
-                'name'  => 'Amadou DIALLO',
-                'class' => 'CM1',
-                'label' => 'CM1 A',
-            ],
-            [
-                'email' => 'prof.bamba@intec.edu',
-                'name'  => 'Fatou BAMBA',
-                'class' => 'CE2',
-                'label' => 'CE2 B',
-            ],
-            [
-                'email' => 'prof.kone@intec.edu',
-                'name'  => 'Youssouf KONÉ',
-                'class' => 'CP',
-                'label' => 'CP A',
-            ],
-        ];
-
-        $createdTeachers = [];
-        foreach ($teachers as $t) {
+        // ── Create users + classrooms ─────────────────────────────────────────
+        foreach ($this->teachers as $t) {
             $user = User::firstOrCreate(
                 ['email' => $t['email']],
-                ['name' => $t['name'], 'password' => Hash::make('password')]
+                [
+                    'name'     => $t['name'],
+                    'password' => Hash::make($t['password']),
+                ]
             );
             $user->assignRole('teacher');
-            $createdTeachers[$t['email']] = $user;
-        }
 
-        // ── 3 classes primaire (une par enseignant) ───────────────────────────
-        $classrooms = [];
-        foreach ($teachers as $t) {
-            $teacher = $createdTeachers[$t['email']];
-
-            $classroom = Classroom::firstOrCreate(
+            Classroom::firstOrCreate(
                 [
-                    'code'             => $t['class'],
-                    'section'          => substr($t['label'], -1), // 'A' or 'B'
+                    'code'             => $t['code'],
+                    'section'          => $t['section'],
                     'academic_year_id' => $year->id,
                     'niveau_id'        => $niveau->id,
                 ],
                 [
                     'label'      => $t['label'],
-                    'teacher_id' => $teacher->id,
+                    'teacher_id' => $user->id,
                 ]
-            );
-
-            $classrooms[$t['email']] = $classroom;
-        }
-
-        // ── Matières supplémentaires pour chaque classe ───────────────────────
-        // CM1 : ajouter HISTOIRE-GÉO et ANGLAIS
-        $cm1Classroom = $classrooms['prof.diallo@intec.edu'];
-        $this->ensureSubjectWithCompetences($niveau, [
-            'name'           => 'HISTOIRE-GÉOGRAPHIE',
-            'code'           => 'HG',
-            'classroom_code' => 'CM1',
-            'max_score'      => 20,
-            'scale_type'     => ScaleTypeEnum::NUMERIC->value,
-            'order'          => 4,
-        ], [
-            ['code' => 'CB1', 'description' => 'Situer les grandes périodes de l\'histoire nationale et africaine.', 'max_score' => 10, 'order' => 1],
-            ['code' => 'CB2', 'description' => 'Lire et interpréter une carte géographique simple.', 'max_score' => 10, 'order' => 2],
-        ]);
-
-        // CE2 : ajouter EPS et SCIENCES
-        $this->ensureSubjectWithCompetences($niveau, [
-            'name'           => 'EPS',
-            'code'           => 'EPS',
-            'classroom_code' => 'CE2',
-            'max_score'      => 20,
-            'scale_type'     => ScaleTypeEnum::NUMERIC->value,
-            'order'          => 4,
-        ], [
-            ['code' => 'CB1', 'description' => 'Réaliser des actions motrices variées (course, saut, lancer).', 'max_score' => 10, 'order' => 1],
-            ['code' => 'CB2', 'description' => 'Respecter les règles de vie collective lors des jeux sportifs.', 'max_score' => 10, 'order' => 2],
-        ]);
-
-        // CP : ajouter ÉDUCATION MORALE et CIVIQUE
-        $this->ensureSubjectWithCompetences($niveau, [
-            'name'           => 'ÉDUCATION MORALE ET CIVIQUE',
-            'code'           => 'EMC',
-            'classroom_code' => 'CP',
-            'max_score'      => 20,
-            'scale_type'     => ScaleTypeEnum::NUMERIC->value,
-            'order'          => 4,
-        ], [
-            ['code' => 'CB1', 'description' => 'Connaître et respecter les règles de vie en communauté.', 'max_score' => 10, 'order' => 1],
-            ['code' => 'CB2', 'description' => 'Identifier les symboles et institutions civiques de base.', 'max_score' => 10, 'order' => 2],
-        ]);
-
-        // ── 10 élèves répartis sur les 3 classes ─────────────────────────────
-        $students = [
-            // CM1 A (4 élèves)
-            ['full_name' => 'Kofi ASANTE',      'gender' => 'M', 'birth_date' => '2014-03-12', 'classroom' => 'prof.diallo@intec.edu'],
-            ['full_name' => 'Ama MENSAH',        'gender' => 'F', 'birth_date' => '2014-07-25', 'classroom' => 'prof.diallo@intec.edu'],
-            ['full_name' => 'Ibrahim COULIBALY', 'gender' => 'M', 'birth_date' => '2013-11-08', 'classroom' => 'prof.diallo@intec.edu'],
-            ['full_name' => 'Aissatou BARRY',    'gender' => 'F', 'birth_date' => '2014-01-30', 'classroom' => 'prof.diallo@intec.edu'],
-            // CE2 B (3 élèves)
-            ['full_name' => 'Moussa TRAORÉ',    'gender' => 'M', 'birth_date' => '2015-05-19', 'classroom' => 'prof.bamba@intec.edu'],
-            ['full_name' => 'Mariam DIOMANDE',  'gender' => 'F', 'birth_date' => '2015-09-03', 'classroom' => 'prof.bamba@intec.edu'],
-            ['full_name' => 'Seydou OUATTARA',  'gender' => 'M', 'birth_date' => '2015-02-14', 'classroom' => 'prof.bamba@intec.edu'],
-            // CP A (3 élèves)
-            ['full_name' => 'Adja CAMARA',      'gender' => 'F', 'birth_date' => '2017-06-22', 'classroom' => 'prof.kone@intec.edu'],
-            ['full_name' => 'Lamine SYLLA',     'gender' => 'M', 'birth_date' => '2017-08-10', 'classroom' => 'prof.kone@intec.edu'],
-            ['full_name' => 'Nafi KOUYATÉ',     'gender' => 'F', 'birth_date' => '2017-04-05', 'classroom' => 'prof.kone@intec.edu'],
-        ];
-
-        $index = 1;
-        foreach ($students as $s) {
-            $classroom = $classrooms[$s['classroom']];
-            $matricule = 'INTEC-PRIM-' . str_pad($index, 3, '0', STR_PAD_LEFT);
-
-            Student::firstOrCreate(
-                ['matricule' => $matricule],
-                [
-                    'full_name'        => $s['full_name'],
-                    'gender'           => $s['gender'],
-                    'birth_date'       => $s['birth_date'],
-                    'classroom_id'     => $classroom->id,
-                    'academic_year_id' => $year->id,
-                ]
-            );
-            $index++;
-        }
-    }
-
-    private function ensureSubjectWithCompetences(Niveau $niveau, array $subjectData, array $competencesData): void
-    {
-        $subjectData['niveau_id'] = $niveau->id;
-
-        $subject = Subject::firstOrCreate(
-            [
-                'code'           => $subjectData['code'],
-                'niveau_id'      => $niveau->id,
-                'classroom_code' => $subjectData['classroom_code'] ?? null,
-            ],
-            $subjectData
-        );
-
-        foreach ($competencesData as $comp) {
-            Competence::firstOrCreate(
-                ['subject_id' => $subject->id, 'code' => $comp['code']],
-                array_merge($comp, ['subject_id' => $subject->id])
             );
         }
     }

@@ -15,23 +15,19 @@ use Maatwebsite\Excel\Concerns\ToArray;
 use Maatwebsite\Excel\Concerns\WithStartRow;
 
 /**
- * XLSX Grade Sheet Import — class-specific subjects/competences only.
+ * GradeSheetImport — section-aware, ignores manual summary columns.
  *
- * Matches the GradeSheetExport layout:
- *   Row 1  → Title  (skipped)
- *   Row 2  → Period label (skipped)
- *   Row 3  → Subject names (used for composite key)
- *   Row 4  → Competence labels (e.g. "CB1 / Lecture /20")
- *   Row 5+ → Student data
+ * Subjects loaded match the SAME logic as GradeSheetExport:
+ *   1) section_code = classroom.code, OR
+ *   2) classroom_code = level (CPA → CP) when section_code is NULL, OR
+ *   3) global subjects (no section, no level) within the niveau.
  *
- * Subjects loaded match niveau + classroom.code (or NULL classroom_code).
- *
- * Manual columns (Total, Moyenne /10, Moy. classe /10, DISCIPLINE, OBSERVATIONS)
- * are detected by their header text and SKIPPED from grade processing.
- * DISCIPLINE → discipline_status, OBSERVATIONS → teacher_comment.
- *
- * Composite key = "subjectname::competencecode" (lowercased) so subjects that
- * share competence codes (CB1, CB2, CB3) don't collide.
+ * Manual columns detected by header text and routed (NOT treated as competences):
+ *   - "Total sur …"            → bulletin->total_manuel
+ *   - "Moyenne sur 10"          → bulletin->moyenne_10
+ *   - "Moyenne de la classe …"  → bulletin->moyenne_classe
+ *   - "DISCIPLINE"              → bulletin->discipline_status
+ *   - "OBSERVATIONS"            → bulletin->teacher_comment
  */
 class GradeSheetImport implements ToArray, WithStartRow
 {
@@ -42,16 +38,17 @@ class GradeSheetImport implements ToArray, WithStartRow
     public array $errors      = [];
 
     private Collection $subjects;
-
-    /** "subjectname::competencecode" (lowercased) → competence model */
+    /** "subjectname::competencecode" (lowercased) → Competence */
     private array $competenceMap = [];
-
-    /** column index (0-based) → "subjectname::competencecode" */
+    /** colIndex (0-based) → composite key */
     private array $columnMap = [];
 
-    /** column index (0-based) for special manual columns */
-    private ?int $disciplineCol = null;
-    private ?int $observationsCol = null;
+    /** Routed manual columns (0-based indices) */
+    private ?int $totalCol         = null;
+    private ?int $moy10Col         = null;
+    private ?int $moyClasseCol     = null;
+    private ?int $disciplineCol    = null;
+    private ?int $observationsCol  = null;
 
     public function __construct(
         private int    $classroomId,
@@ -63,23 +60,30 @@ class GradeSheetImport implements ToArray, WithStartRow
         $this->loadSubjectsAndCompetences();
     }
 
-    public function startRow(): int
-    {
-        return 1;
-    }
+    public function startRow(): int { return 1; }
 
-    // ── Subject / competence loading (CLASS-SPECIFIC) ─────────────────────────
+    // ── Subject loading (section-aware, mirrors export) ──────────────────────
 
     private function loadSubjectsAndCompetences(): void
     {
-        $classroom = Classroom::findOrFail($this->classroomId);
+        $classroom   = Classroom::findOrFail($this->classroomId);
+        $sectionCode = (string) $classroom->code;
+        $levelCode   = preg_replace('/[AB]$/', '', $sectionCode) ?: $sectionCode;
 
         $query = Subject::whereHas('niveau', fn($q) => $q->where('code', $this->niveauCode))
-            ->where(fn($q) => $q
-                ->whereNull('classroom_code')
-                ->orWhere('classroom_code', $classroom->code)
-            )
-            ->with(['competences' => fn($q) => $q->orderBy('order')])
+            ->where(function ($q) use ($sectionCode, $levelCode) {
+                $q->where('section_code', $sectionCode)
+                  ->orWhere(function ($q2) use ($levelCode) {
+                      $q2->whereNull('section_code')->where('classroom_code', $levelCode);
+                  })
+                  ->orWhere(function ($q3) {
+                      $q3->whereNull('section_code')->whereNull('classroom_code');
+                  });
+            })
+            ->with(['competences' => function ($q) use ($sectionCode) {
+                $q->where(fn($q2) => $q2->whereNull('section_code')->orWhere('section_code', $sectionCode))
+                  ->orderBy('order');
+            }])
             ->orderBy('order');
 
         if ($this->teacherId) {
@@ -98,7 +102,8 @@ class GradeSheetImport implements ToArray, WithStartRow
 
         Log::info('GradeSheetImport: Loaded subjects', [
             'classroom_id'      => $this->classroomId,
-            'classroom_code'    => $classroom->code,
+            'section_code'      => $sectionCode,
+            'level_code'        => $levelCode,
             'subjects_count'    => $this->subjects->count(),
             'competences_count' => count($this->competenceMap),
             'teacher_id'        => $this->teacherId,
@@ -110,13 +115,14 @@ class GradeSheetImport implements ToArray, WithStartRow
         return strtolower(trim($subjectName)) . '::' . strtolower(trim($competenceCode));
     }
 
-    // ── Main entry point ──────────────────────────────────────────────────────
+    // ── Main entry ───────────────────────────────────────────────────────────
 
     public function array(array $allRows): void
     {
         $codeRowIndex    = null;
         $subjectRowIndex = null;
 
+        // Find the header row whose first cell is "Matricule"
         foreach ($allRows as $i => $row) {
             $firstCell = strtolower(trim((string) ($row[0] ?? '')));
             if ($firstCell === 'matricule') {
@@ -127,33 +133,22 @@ class GradeSheetImport implements ToArray, WithStartRow
         }
 
         if ($codeRowIndex === null || $subjectRowIndex === null || $subjectRowIndex < 0) {
-            $this->errors[] = 'Impossible de trouver la ligne des en-têtes (Matricule introuvable à la ligne 4).';
-            Log::error('GradeSheetImport: header row not found');
+            $this->errors[] = 'Impossible de trouver la ligne des en-têtes (Matricule introuvable).';
             return;
         }
 
-        $subjectRow = $allRows[$subjectRowIndex] ?? [];
-        $codeRow    = $allRows[$codeRowIndex]    ?? [];
-
-        $this->buildColumnMap($subjectRow, $codeRow);
-
-        Log::info('GradeSheetImport: Column map built', [
-            'columns'         => count($this->columnMap),
-            'discipline_col'  => $this->disciplineCol,
-            'observations_col'=> $this->observationsCol,
-        ]);
+        $this->buildColumnMap($allRows[$subjectRowIndex] ?? [], $allRows[$codeRowIndex] ?? []);
 
         if (empty($this->columnMap)) {
-            $knownSubjects = implode(', ', array_unique(array_map(
+            $known = implode(', ', array_unique(array_map(
                 fn($k) => explode('::', $k)[0],
                 array_keys($this->competenceMap)
             )));
-            $this->errors[] = 'Aucune colonne de notes reconnue. '
-                . ($knownSubjects ? "Matières attendues : {$knownSubjects}." : 'Aucune matière pour ce niveau/classe.');
+            $this->errors[] = 'Aucune colonne de notes reconnue. ' . ($known ? "Matières attendues : {$known}." : '');
             return;
         }
 
-        // Find first data row
+        // Locate first data row
         $dataStartIndex = null;
         for ($i = $codeRowIndex + 1; $i < count($allRows); $i++) {
             $firstCell = trim((string) ($allRows[$i][0] ?? ''));
@@ -171,40 +166,28 @@ class GradeSheetImport implements ToArray, WithStartRow
         for ($i = $dataStartIndex; $i < count($allRows); $i++) {
             $row       = $allRows[$i];
             $firstCell = trim((string) ($row[0] ?? ''));
-
             if ($firstCell === '' || $firstCell === '---') continue;
 
             try {
                 $this->processRow($row, $i + 1);
             } catch (\Throwable $e) {
                 $this->errors[] = 'Ligne ' . ($i + 1) . ': ' . $e->getMessage();
-                Log::error('GradeSheetImport: row error', [
-                    'row'   => $i + 1,
-                    'error' => $e->getMessage(),
-                ]);
             }
         }
 
-        Log::info('GradeSheetImport: Completed', [
-            'imported'     => $this->imported,
-            'skipped'      => $this->skipped,
-            'grades_total' => $this->gradesTotal,
-            'errors_count' => count($this->errors),
+        Log::info('GradeSheetImport: completed', [
+            'imported'    => $this->imported,
+            'skipped'     => $this->skipped,
+            'gradesTotal' => $this->gradesTotal,
+            'errors'      => count($this->errors),
         ]);
     }
 
-    // ── Column map builder ────────────────────────────────────────────────────
+    // ── Column map builder ───────────────────────────────────────────────────
 
-    /**
-     * Build the mapping from column index → competence key.
-     * Also detects DISCIPLINE and OBSERVATIONS manual columns.
-     *
-     * Manual summary columns (Total, Moyenne, Moy. classe) are recognized by
-     * their header text and SKIPPED — they don't map to any competence.
-     */
     private function buildColumnMap(array $subjectRow, array $codeRow): void
     {
-        // Labels in the SUBJECT row that are not actual subjects
+        // Labels in the SUBJECT row (row 3) that are NOT subject names
         $nonSubjectLabels = [
             'matricule', 'nom complet', 'nom', 'prénom', 'prenom',
             'date naissance', 'date de naissance',
@@ -214,103 +197,108 @@ class GradeSheetImport implements ToArray, WithStartRow
             '',
         ];
 
-        // Labels in the CODE row that mark MANUAL columns (not competences)
-        $manualColumnPatterns = [
-            'total sur',           // "Total sur 290"
-            'total',
-            'moyenne sur 10',
-            'moyenne sur',
-            'moyenne de la classe',
-            'moyenne classe',
-            'moy. classe',
-            'moy classe',
-            'discipline',
-            'observations',
-            'commentaire',
-        ];
-
-        // Propagate subject name rightward across merged (null/blank) cells
+        // Propagate subject names rightward across merged blank cells.
+        // Reset to null when a non-subject label is encountered.
         $currentSubject = null;
         $subjectForCol  = [];
 
         foreach ($subjectRow as $val) {
             $trimmed = trim((string) $val);
-            if ($trimmed !== '' && !in_array(strtolower($trimmed), $nonSubjectLabels, true)) {
-                // Strip trailing " /20" max-score hint from subject header
-                $cleaned = preg_replace('#\s*/\s*\d+\s*$#u', '', $trimmed);
+            $lower   = strtolower($trimmed);
+
+            if ($trimmed !== '' && !in_array($lower, $nonSubjectLabels, true)) {
+                // Strip trailing "/20" max-score hint from subject header
+                $cleaned        = preg_replace('#\s*/\s*\d+\s*$#u', '', $trimmed);
                 $currentSubject = trim($cleaned);
-            } elseif ($trimmed !== '' && in_array(strtolower($trimmed), $nonSubjectLabels, true)) {
-                // Hit a non-subject label (e.g. TOTAUX / MOYENNES, DIM. PERS., OBSERVATIONS)
-                // → reset so propagation stops
+            } elseif ($trimmed !== '' && in_array($lower, $nonSubjectLabels, true)) {
                 $currentSubject = null;
             }
             $subjectForCol[] = $currentSubject;
         }
 
-        $this->columnMap       = [];
-        $this->disciplineCol   = null;
-        $this->observationsCol = null;
+        // Reset all routed-column trackers
+        $this->columnMap        = [];
+        $this->totalCol         = null;
+        $this->moy10Col         = null;
+        $this->moyClasseCol     = null;
+        $this->disciplineCol    = null;
+        $this->observationsCol  = null;
 
-        // Skip identity columns (0=Matricule, 1=Nom Complet, 2=Date Naissance)
-        for ($col = 3; $col < count($codeRow); $col++) {
-            $rawLabel    = trim((string) ($codeRow[$col] ?? ''));
-            $lowerLabel  = strtolower($rawLabel);
-            $subject     = $subjectForCol[$col] ?? null;
+        // Iterate over the columns, skipping identity (0, 1, 2)
+        $maxCol = max(count($codeRow), count($subjectRow));
+        for ($col = 3; $col < $maxCol; $col++) {
+            $rawLabel      = trim((string) ($codeRow[$col] ?? ''));
+            $lowerLabel    = strtolower($rawLabel);
             $subjectRowVal = strtolower(trim((string) ($subjectRow[$col] ?? '')));
+            $subjectFor    = $subjectForCol[$col] ?? null;
 
-            // ── Detect MANUAL summary columns by header text ──────────────────
-            $isManualColumn = false;
-            foreach ($manualColumnPatterns as $pattern) {
-                if (str_contains($lowerLabel, $pattern)) {
-                    $isManualColumn = true;
-                    break;
-                }
+            // ── Manual summary column detection ────────────────────────────
+            // Order matters: more specific patterns first.
+            if (str_contains($lowerLabel, 'moyenne de la classe')
+                || str_contains($lowerLabel, 'moyenne classe')
+                || str_contains($lowerLabel, 'moy. classe')
+                || str_contains($lowerLabel, 'moy classe')) {
+                $this->moyClasseCol = $col;
+                continue;
             }
-
-            if ($isManualColumn) {
-                // Identify DISCIPLINE specifically
-                if (str_contains($lowerLabel, 'discipline')) {
-                    $this->disciplineCol = $col;
-                }
-                continue; // skip from competence map
+            if (str_contains($lowerLabel, 'moyenne sur 10')
+                || str_contains($lowerLabel, 'moyenne sur')
+                || (str_contains($lowerLabel, 'moyenne') && !str_contains($lowerLabel, 'classe'))) {
+                $this->moy10Col = $col;
+                continue;
             }
-
-            // ── Detect OBSERVATIONS column from subject row (it's labeled in row 3) ──
-            if (str_contains($subjectRowVal, 'observation') || str_contains($subjectRowVal, 'commentaire')) {
-                if ($this->observationsCol === null) {
-                    $this->observationsCol = $col;
-                }
+            if (str_contains($lowerLabel, 'total sur')
+                || $lowerLabel === 'total') {
+                $this->totalCol = $col;
+                continue;
+            }
+            if (str_contains($lowerLabel, 'discipline')
+                || str_contains($subjectRowVal, 'dim. pers.')
+                || str_contains($subjectRowVal, 'dim pers')) {
+                $this->disciplineCol = $col;
+                continue;
+            }
+            if (str_contains($subjectRowVal, 'observation')
+                || str_contains($subjectRowVal, 'commentaire')
+                || str_contains($lowerLabel, 'observations')
+                || str_contains($lowerLabel, 'commentaire')) {
+                $this->observationsCol = $col;
                 continue;
             }
 
-            // ── Skip if no subject context or empty label ─────────────────────
-            if ($rawLabel === '' || $subject === null) continue;
+            // ── Competence mapping ─────────────────────────────────────────
+            if ($rawLabel === '' || $subjectFor === null) continue;
 
-            // ── Extract competence code: "CB1 / Lecture /20" → "CB1" ──────────
+            // Extract competence code: "CB1 / Lecture /20" → "CB1"
             $code = $rawLabel;
             if (str_contains($rawLabel, '/')) {
                 $code = trim(explode('/', $rawLabel)[0]);
             }
-            // Special case: DICTEE has no "CB" prefix
-            $code = trim($code);
 
-            $key = $this->makeKey($subject, $code);
-
+            $key = $this->makeKey($subjectFor, $code);
             if (isset($this->competenceMap[$key])) {
                 $this->columnMap[$col] = $key;
             } else {
-                Log::warning('GradeSheetImport: unknown competence key', [
-                    'col'         => $col,
-                    'subject_raw' => $subject,
-                    'code'        => $code,
-                    'key'         => $key,
-                    'known_keys'  => array_keys($this->competenceMap),
+                Log::warning('GradeSheetImport: unknown competence', [
+                    'col'     => $col,
+                    'subject' => $subjectFor,
+                    'code'    => $code,
+                    'key'     => $key,
                 ]);
             }
         }
+
+        Log::info('GradeSheetImport: column map built', [
+            'columns'         => count($this->columnMap),
+            'total_col'       => $this->totalCol,
+            'moy10_col'       => $this->moy10Col,
+            'moy_classe_col'  => $this->moyClasseCol,
+            'discipline_col'  => $this->disciplineCol,
+            'observations_col'=> $this->observationsCol,
+        ]);
     }
 
-    // ── Student row processing ────────────────────────────────────────────────
+    // ── Row processing ───────────────────────────────────────────────────────
 
     private function processRow(array $row, int $rowNumber): void
     {
@@ -321,7 +309,7 @@ class GradeSheetImport implements ToArray, WithStartRow
             ->where('classroom_id', $this->classroomId)
             ->first();
 
-        if (!$student) {
+        if (! $student) {
             $this->errors[] = "Ligne {$rowNumber}: élève introuvable (matricule: {$matricule})";
             $this->skipped++;
             return;
@@ -332,47 +320,52 @@ class GradeSheetImport implements ToArray, WithStartRow
             $bulletin        = app(CreateBulletinAction::class)->execute($student, $this->period, $this->yearId);
             $gradesProcessed = 0;
 
+            // ── Competence grades ───────────────────────────────────────────
             foreach ($this->columnMap as $colIndex => $compositeKey) {
                 $rawValue = $row[$colIndex] ?? null;
                 $trimmed  = trim((string) $rawValue);
-
-                if ($trimmed === '' || $rawValue === null) continue;
+                if ($trimmed === '') continue;
 
                 $competence = $this->competenceMap[$compositeKey] ?? null;
-                if (!$competence) continue;
+                if (! $competence) continue;
 
-                $isPrescolaire = $competence->subject->scale_type === 'competence';
-
-                if ($isPrescolaire) {
-                    $this->saveCompetenceStatus($bulletin, $competence, $rawValue, $rowNumber);
+                if ($competence->subject->scale_type === 'competence') {
+                    $this->saveCompetenceStatus($bulletin, $competence, $rawValue);
                 } else {
-                    $this->saveNumericScore($bulletin, $competence, $rawValue, $rowNumber);
+                    $this->saveNumericScore($bulletin, $competence, $rawValue);
                 }
-
                 $gradesProcessed++;
             }
 
-            // ── Read DISCIPLINE column (manual entry) ─────────────────────────
+            // ── Manual summary fields → bulletin columns ────────────────────
+            $updates = [];
+
+            if ($this->totalCol !== null) {
+                $val = $this->parseNumeric($row[$this->totalCol] ?? null);
+                $updates['total_manuel'] = $val;
+            }
+            if ($this->moy10Col !== null) {
+                $val = $this->parseNumeric($row[$this->moy10Col] ?? null);
+                $updates['moyenne_10'] = $val;
+            }
+            if ($this->moyClasseCol !== null) {
+                $val = $this->parseNumeric($row[$this->moyClasseCol] ?? null);
+                $updates['moyenne_classe'] = $val;
+            }
             if ($this->disciplineCol !== null) {
-                $discipline = trim((string) ($row[$this->disciplineCol] ?? ''));
-                if ($discipline !== '') {
-                    $bulletin->update(['discipline_status' => $discipline]);
-                }
+                $val = trim((string) ($row[$this->disciplineCol] ?? ''));
+                $updates['discipline_status'] = $val !== '' ? $val : null;
+            }
+            if ($this->observationsCol !== null) {
+                $val   = trim((string) ($row[$this->observationsCol] ?? ''));
+                $lower = strtolower($val);
+                $updates['teacher_comment'] = ($val !== '' && !in_array($lower, ['observations', 'commentaire'], true))
+                    ? $val
+                    : null;
             }
 
-            // ── Read OBSERVATIONS column (manual entry) ───────────────────────
-            if ($this->observationsCol !== null) {
-                $obs = trim((string) ($row[$this->observationsCol] ?? ''));
-                if ($obs !== '' && strtolower($obs) !== 'observations' && strtolower($obs) !== 'commentaire') {
-                    $bulletin->update(['teacher_comment' => $obs]);
-                }
-            } else {
-                // Fallback: last column might be observations
-                $lastColIndex = count($row) - 1;
-                $comment      = trim((string) ($row[$lastColIndex] ?? ''));
-                if ($comment !== '' && strtolower($comment) !== 'commentaire' && strtolower($comment) !== 'observations') {
-                    $bulletin->update(['teacher_comment' => $comment]);
-                }
+            if (! empty($updates)) {
+                $bulletin->update($updates);
             }
 
             DB::commit();
@@ -391,16 +384,23 @@ class GradeSheetImport implements ToArray, WithStartRow
         }
     }
 
-    // ── Grade persistence ─────────────────────────────────────────────────────
+    // ── Helpers ──────────────────────────────────────────────────────────────
 
-    private function saveCompetenceStatus($bulletin, $competence, mixed $raw, int $line): void
+    private function parseNumeric(mixed $raw): ?float
+    {
+        if ($raw === null) return null;
+        $clean = str_replace([' ', ','], ['', '.'], trim((string) $raw));
+        if ($clean === '') return null;
+        return is_numeric($clean) ? (float) $clean : null;
+    }
+
+    // ── Grade persistence ────────────────────────────────────────────────────
+
+    private function saveCompetenceStatus($bulletin, $competence, mixed $raw): void
     {
         $value = strtoupper(trim((string) $raw));
-
-        if (!in_array($value, ['A', 'EVA', 'NA'], true)) {
-            throw new \InvalidArgumentException(
-                "Statut invalide « {$value} » pour {$competence->code} (attendu : A, EVA ou NA)"
-            );
+        if (! in_array($value, ['A', 'EVA', 'NA'], true)) {
+            throw new \InvalidArgumentException("Statut invalide « {$value} » pour {$competence->code} (attendu : A, EVA ou NA)");
         }
 
         BulletinGrade::updateOrCreate(
@@ -409,23 +409,18 @@ class GradeSheetImport implements ToArray, WithStartRow
         );
     }
 
-    private function saveNumericScore($bulletin, $competence, mixed $raw, int $line): void
+    private function saveNumericScore($bulletin, $competence, mixed $raw): void
     {
         $clean = str_replace([' ', ','], ['', '.'], trim((string) $raw));
-
-        if (!is_numeric($clean)) {
-            throw new \InvalidArgumentException(
-                "Note non numérique « {$raw} » pour {$competence->code}"
-            );
+        if (! is_numeric($clean)) {
+            throw new \InvalidArgumentException("Note non numérique « {$raw} » pour {$competence->code}");
         }
 
         $score    = (float) $clean;
         $maxScore = (float) ($competence->max_score ?? $competence->subject->max_score ?? 20);
 
         if ($score < 0 || $score > $maxScore) {
-            throw new \InvalidArgumentException(
-                "Note {$score} hors plage 0–{$maxScore} pour {$competence->code}"
-            );
+            throw new \InvalidArgumentException("Note {$score} hors plage 0–{$maxScore} pour {$competence->code}");
         }
 
         BulletinGrade::updateOrCreate(

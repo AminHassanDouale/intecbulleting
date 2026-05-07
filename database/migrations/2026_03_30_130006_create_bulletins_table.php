@@ -21,6 +21,12 @@ return new class extends Migration
             $table->string('appreciation')->nullable();
             $table->text('teacher_comment')->nullable();
             $table->text('direction_comment')->nullable();
+            // ── New columns ───────────────────────────────────────────────
+            $table->decimal('total_manuel', 6, 2)->nullable();     // manual override for total score
+            $table->decimal('moyenne_10', 4, 2)->nullable();       // moyenne scaled to /10
+            $table->decimal('moyenne_classe', 4, 2)->nullable();   // class average (replaces legacy class_moyenne)
+            $table->string('discipline_status', 20)->nullable();   // e.g. 'bien', 'passable', 'insuffisant'
+            // ─────────────────────────────────────────────────────────────
             $table->foreignId('submitted_by')->nullable()->constrained('users')->nullOnDelete();
             $table->foreignId('pedagogie_approved_by')->nullable()->constrained('users')->nullOnDelete();
             $table->foreignId('finance_approved_by')->nullable()->constrained('users')->nullOnDelete();

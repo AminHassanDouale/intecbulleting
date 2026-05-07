@@ -14,7 +14,7 @@ class Bulletin extends Model implements HasMedia
 {
     use SoftDeletes, InteractsWithMedia, CalculatesMoyenne;
 
-    // Override rejectWorkflow from HasWorkflow so we can reset teacher submissions
+    // Override rejectWorkflow from HasWorkflow so we can reset teacher submissions.
     use HasWorkflow {
         rejectWorkflow as protected traitRejectWorkflow;
     }
@@ -23,6 +23,12 @@ class Bulletin extends Model implements HasMedia
         'student_id', 'classroom_id', 'academic_year_id', 'period',
         'status', 'total_score', 'moyenne', 'class_moyenne',
         'appreciation', 'teacher_comment', 'direction_comment',
+        // ── New columns ───────────────────────────────────────────────────
+        'total_manuel',       // manual override for total score
+        'moyenne_10',         // moyenne scaled to /10
+        'moyenne_classe',     // class average (replaces legacy class_moyenne)
+        'discipline_status',  // e.g. 'bien', 'passable', 'insuffisant'
+        // ─────────────────────────────────────────────────────────────────
         'submitted_by', 'pedagogie_approved_by', 'finance_approved_by',
         'direction_approved_by', 'submitted_at', 'pedagogie_approved_at',
         'finance_approved_at', 'direction_approved_at', 'published_at',
@@ -30,6 +36,12 @@ class Bulletin extends Model implements HasMedia
 
     protected $casts = [
         'status'                => BulletinStatusEnum::class,
+        'total_score'           => 'decimal:2',
+        'moyenne'               => 'decimal:2',
+        'class_moyenne'         => 'decimal:2',
+        'total_manuel'          => 'decimal:2',
+        'moyenne_10'            => 'decimal:2',
+        'moyenne_classe'        => 'decimal:2',
         'submitted_at'          => 'datetime',
         'pedagogie_approved_at' => 'datetime',
         'finance_approved_at'   => 'datetime',
@@ -87,12 +99,13 @@ class Bulletin extends Model implements HasMedia
 
     /**
      * Can this user still edit grades?
-     * - Direction/admin: yes unless bulletin is approved or published
-     * - Teacher: yes if DRAFT and not yet submitted, or REJECTED
+     * - Direction/admin: yes unless bulletin is published.
+     * - Teacher: yes if DRAFT and not yet submitted, or REJECTED.
      */
     public function canTeacherEdit(int $userId): bool
     {
         $user = \App\Models\User::find($userId);
+
         if ($user?->hasAnyRole(['admin', 'direction'])) {
             return $this->status !== BulletinStatusEnum::PUBLISHED;
         }
@@ -107,8 +120,8 @@ class Bulletin extends Model implements HasMedia
 
     /**
      * Returns true when every teacher assigned to THIS classroom has submitted.
-     * Uses the classroom_teacher pivot — not the classroom_code on subjects —
-     * so CP A only waits for its own 3 teachers, not CP B's.
+     * Uses the classroom_teacher pivot — not classroom_code on subjects —
+     * so CP A only waits for its own teachers, not CP B's.
      */
     public function allTeachersSubmitted(): bool
     {
@@ -142,11 +155,37 @@ class Bulletin extends Model implements HasMedia
         return [
             'total'     => $teachers->count(),
             'submitted' => $submittedIds->count(),
-            'teachers'  => $teachers->map(fn($t) => [
+            'teachers'  => $teachers->map(fn ($t) => [
                 'name'      => $t->name,
                 'submitted' => $submittedIds->contains($t->id),
             ])->toArray(),
         ];
+    }
+
+    // ── Moyenne helpers ────────────────────────────────────────────────────────
+
+    /**
+     * The effective total to use: manual override takes precedence over computed.
+     */
+    public function effectiveTotal(): ?float
+    {
+        return $this->total_manuel ?? $this->total_score;
+    }
+
+    /**
+     * The effective class average: new moyenne_classe takes precedence over legacy class_moyenne.
+     */
+    public function effectiveClassMoyenne(): ?float
+    {
+        return $this->moyenne_classe ?? $this->class_moyenne;
+    }
+
+    /**
+     * Whether the total has been manually overridden by direction/admin.
+     */
+    public function hasManuaOverride(): bool
+    {
+        return ! is_null($this->total_manuel);
     }
 
     // ── Workflow override ──────────────────────────────────────────────────────

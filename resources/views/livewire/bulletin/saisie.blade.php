@@ -25,20 +25,20 @@ use Mary\Traits\Toast;
 new #[Layout('components.layouts.app')] class extends Component {
     use Toast, WithFileUploads;
 
-    // ── Selectors ─────────────────────────────────────────────────────────────
     public ?int    $selectedYear      = null;
     public ?string $selectedNiveau    = null;
     public ?int    $selectedClassroom = null;
     public string  $selectedPeriod    = 'T1';
 
-    // ── Grade form ────────────────────────────────────────────────────────────
     public ?int    $selectedStudent  = null;
     public ?int    $bulletinId       = null;
     public array   $grades           = [];
     public string  $teacherComment   = '';
+    public ?string $disciplineStatus = '';
+    public string  $totalManuel      = '';
+    public string  $moyenne10        = '';
+    public string  $moyenneClasse    = '';
     public $importFile = null;
-
-    // ─────────────────────────────────────────────────────────────────────────
 
     public function mount(): void
     {
@@ -50,8 +50,6 @@ new #[Layout('components.layouts.app')] class extends Component {
     public function updatedSelectedClassroom(): void { $this->resetForm(); }
     public function updatedSelectedPeriod(): void    { $this->resetForm(); }
 
-    // ── Student selection ─────────────────────────────────────────────────────
-
     public function selectStudent(int $studentId): void
     {
         if ($this->selectedStudent === $studentId) {
@@ -59,10 +57,14 @@ new #[Layout('components.layouts.app')] class extends Component {
             return;
         }
 
-        $this->selectedStudent = $studentId;
-        $this->grades          = [];
-        $this->teacherComment  = '';
-        $this->bulletinId      = null;
+        $this->selectedStudent  = $studentId;
+        $this->grades           = [];
+        $this->teacherComment   = '';
+        $this->disciplineStatus = '';
+        $this->totalManuel      = '';
+        $this->moyenne10        = '';
+        $this->moyenneClasse    = '';
+        $this->bulletinId       = null;
 
         if (! $this->isPeriodLocked($studentId)) {
             $this->loadOrCreateBulletin($studentId);
@@ -76,9 +78,13 @@ new #[Layout('components.layouts.app')] class extends Component {
         $student  = Student::findOrFail($studentId);
         $bulletin = app(CreateBulletinAction::class)->execute($student, $this->selectedPeriod, $this->selectedYear);
 
-        $this->bulletinId     = $bulletin->id;
-        $this->teacherComment = $bulletin->teacher_comment ?? '';
-        $this->grades         = [];
+        $this->bulletinId       = $bulletin->id;
+        $this->teacherComment   = $bulletin->teacher_comment ?? '';
+        $this->disciplineStatus = $bulletin->discipline_status ?? '';
+        $this->totalManuel      = (string) ($bulletin->total_manuel ?? '');
+        $this->moyenne10        = (string) ($bulletin->moyenne_10 ?? '');
+        $this->moyenneClasse    = (string) ($bulletin->moyenne_classe ?? '');
+        $this->grades           = [];
 
         foreach ($bulletin->grades as $grade) {
             $this->grades[$grade->competence_id] = $grade->score ?? $grade->competence_status?->value;
@@ -87,24 +93,23 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     protected function resetForm(): void
     {
-        $this->selectedStudent = null;
-        $this->bulletinId      = null;
-        $this->grades          = [];
-        $this->teacherComment  = '';
+        $this->selectedStudent  = null;
+        $this->bulletinId       = null;
+        $this->grades           = [];
+        $this->teacherComment   = '';
+        $this->disciplineStatus = '';
+        $this->totalManuel      = '';
+        $this->moyenne10        = '';
+        $this->moyenneClasse    = '';
     }
-
-    // ── Period lock check ─────────────────────────────────────────────────────
 
     public function isPeriodLocked(int $studentId): bool
     {
         if ($this->selectedPeriod === 'T1' || ! $this->selectedYear) return false;
 
         $prereq = match($this->selectedPeriod) {
-            'T2' => 'T1',
-            'T3' => 'T2',
-            default => null,
+            'T2' => 'T1', 'T3' => 'T2', default => null,
         };
-
         if (! $prereq) return false;
 
         $previous = Bulletin::where('student_id', $studentId)
@@ -114,8 +119,6 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         return ! $previous || ! in_array($previous->status->value, ['approved', 'published']);
     }
-
-    // ── Save grades ───────────────────────────────────────────────────────────
 
     public function saveGrades(): void
     {
@@ -130,23 +133,24 @@ new #[Layout('components.layouts.app')] class extends Component {
         }
 
         app(SaveGradeAction::class)->execute($bulletin, $this->grades);
-        if ($this->teacherComment) {
-            $bulletin->update(['teacher_comment' => $this->teacherComment]);
-        }
+
+        // Always overwrite — empty string becomes null so the user can clear values
+        $bulletin->update([
+            'teacher_comment'   => $this->teacherComment   !== '' ? $this->teacherComment   : null,
+            'discipline_status' => $this->disciplineStatus !== '' ? $this->disciplineStatus : null,
+            'total_manuel'      => $this->totalManuel      !== '' ? (float) $this->totalManuel   : null,
+            'moyenne_10'        => $this->moyenne10        !== '' ? (float) $this->moyenne10     : null,
+            'moyenne_classe'    => $this->moyenneClasse    !== '' ? (float) $this->moyenneClasse : null,
+        ]);
 
         if ($isDirection) {
-            $now = now();
-            $uid = auth()->id();
+            $now = now(); $uid = auth()->id();
             $bulletin->update([
                 'status'                => BulletinStatusEnum::APPROVED,
-                'submitted_by'          => $uid,
-                'submitted_at'          => $now,
-                'pedagogie_approved_by' => $uid,
-                'pedagogie_approved_at' => $now,
-                'finance_approved_by'   => $uid,
-                'finance_approved_at'   => $now,
-                'direction_approved_by' => $uid,
-                'direction_approved_at' => $now,
+                'submitted_by'          => $uid, 'submitted_at'          => $now,
+                'pedagogie_approved_by' => $uid, 'pedagogie_approved_at' => $now,
+                'finance_approved_by'   => $uid, 'finance_approved_at'   => $now,
+                'direction_approved_by' => $uid, 'direction_approved_at' => $now,
             ]);
             $this->success('Bulletin approuvé !', 'Prêt à être publié.', icon: 'o-check-badge', position: 'toast-top toast-end');
             $this->resetForm();
@@ -169,12 +173,9 @@ new #[Layout('components.layouts.app')] class extends Component {
         }
     }
 
-    // ── Withdraw submission ───────────────────────────────────────────────────
-
     public function withdrawSubmission(): void
     {
         if (! $this->bulletinId) return;
-
         $bulletin = Bulletin::findOrFail($this->bulletinId);
 
         if (! in_array($bulletin->status->value, ['draft', 'submitted'])) {
@@ -183,7 +184,6 @@ new #[Layout('components.layouts.app')] class extends Component {
         }
 
         $bulletin->teacherSubmissions()->where('teacher_id', auth()->id())->delete();
-
         if ($bulletin->status === BulletinStatusEnum::SUBMITTED) {
             $bulletin->update(['status' => BulletinStatusEnum::DRAFT, 'submitted_by' => null, 'submitted_at' => null]);
         }
@@ -191,8 +191,6 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->success('Soumission retirée.', 'Vous pouvez maintenant corriger vos notes.', icon: 'o-arrow-uturn-left', position: 'toast-top toast-end');
         $this->loadOrCreateBulletin($this->selectedStudent);
     }
-
-    // ── Bulk submit ───────────────────────────────────────────────────────────
 
     public function bulkSubmitMySubjects(): void
     {
@@ -220,13 +218,10 @@ new #[Layout('components.layouts.app')] class extends Component {
         }
 
         $this->resetForm();
-
         $submitted > 0
             ? $this->success("{$submitted} bulletin(s) soumis !", icon: 'o-paper-airplane', position: 'toast-top toast-end')
             : $this->warning('Aucun bulletin à soumettre.', 'Tous déjà soumis ou verrouillés.', icon: 'o-information-circle', position: 'toast-top toast-end');
     }
-
-    // ── Helpers ───────────────────────────────────────────────────────────────
 
     protected function shouldFilterByTeacher(): bool
     {
@@ -239,8 +234,6 @@ new #[Layout('components.layouts.app')] class extends Component {
         return $this->shouldFilterByTeacher() ? auth()->id() : null;
     }
 
-    // ── Excel export ──────────────────────────────────────────────────────────
-
     #[Renderless]
     public function exportGrades(): mixed
     {
@@ -251,27 +244,12 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         $isDirection = auth()->user()->hasAnyRole(['admin', 'direction']);
 
-        if ($isDirection) {
-            $export = new GradeSheetDirectorExport(
-                $this->selectedClassroom,
-                $this->selectedPeriod,
-                $this->selectedYear,
-                $this->selectedNiveau,
-            );
-        } else {
-            $export = new GradeSheetExport(
-                $this->selectedClassroom,
-                $this->selectedPeriod,
-                $this->selectedYear,
-                $this->selectedNiveau,
-                $this->getTeacherIdForExportImport()
-            );
-        }
+        $export = $isDirection
+            ? new GradeSheetDirectorExport($this->selectedClassroom, $this->selectedPeriod, $this->selectedYear, $this->selectedNiveau)
+            : new GradeSheetExport($this->selectedClassroom, $this->selectedPeriod, $this->selectedYear, $this->selectedNiveau, $this->getTeacherIdForExportImport());
 
         return Excel::download($export, $export->getFilename());
     }
-
-    // ── Excel import ──────────────────────────────────────────────────────────
 
     public function importGrades(): void
     {
@@ -279,7 +257,6 @@ new #[Layout('components.layouts.app')] class extends Component {
             $this->error('Sélection incomplète.', icon: 'o-exclamation-circle', position: 'toast-top toast-end');
             return;
         }
-
         if (! $this->importFile) {
             $this->error('Fichier manquant.', 'Veuillez sélectionner un fichier Excel (.xlsx).', icon: 'o-exclamation-circle', position: 'toast-top toast-end');
             return;
@@ -287,7 +264,6 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         if ($this->shouldFilterByTeacher()) {
             $totalStudents = Student::where('classroom_id', $this->selectedClassroom)->count();
-
             if ($totalStudents > 0) {
                 $submittedCount = Bulletin::where('classroom_id', $this->selectedClassroom)
                     ->where('academic_year_id', $this->selectedYear)
@@ -312,13 +288,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         $isDirection = auth()->user()->hasAnyRole(['admin', 'direction']);
         $teacherId   = $this->getTeacherIdForExportImport();
-        $importer    = new GradeSheetImport(
-            $this->selectedClassroom,
-            $this->selectedPeriod,
-            $this->selectedYear,
-            $this->selectedNiveau,
-            $teacherId
-        );
+        $importer    = new GradeSheetImport($this->selectedClassroom, $this->selectedPeriod, $this->selectedYear, $this->selectedNiveau, $teacherId);
 
         try {
             $stored   = $this->importFile->store('grade-imports', 'local');
@@ -330,8 +300,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             $this->importFile = null;
 
             if ($isDirection && $importer->gradesTotal > 0) {
-                $now = now();
-                $uid = auth()->id();
+                $now = now(); $uid = auth()->id();
                 Student::where('classroom_id', $this->selectedClassroom)
                     ->get()
                     ->each(function ($student) use ($now, $uid) {
@@ -352,18 +321,11 @@ new #[Layout('components.layouts.app')] class extends Component {
                     });
             }
 
-            $grades  = $importer->gradesTotal;
-            $message = "{$importer->imported} élève(s) traité(s), {$grades} note(s) enregistrée(s)";
-            if ($importer->skipped > 0) {
-                $message .= ", {$importer->skipped} ignoré(s)";
-            }
+            $message = "{$importer->imported} élève(s) traité(s), {$importer->gradesTotal} note(s) enregistrée(s)";
+            if ($importer->skipped > 0) $message .= ", {$importer->skipped} ignoré(s)";
             $message .= '.';
-            if ($teacherId && $importer->imported > 0) {
-                $message .= ' Seules vos matières ont été importées.';
-            }
-            if ($isDirection && $importer->gradesTotal > 0) {
-                $message .= ' Bulletins approuvés automatiquement.';
-            }
+            if ($teacherId && $importer->imported > 0) $message .= ' Seules vos matières ont été importées.';
+            if ($isDirection && $importer->gradesTotal > 0) $message .= ' Bulletins approuvés automatiquement.';
 
             if (! empty($importer->errors)) {
                 $this->warning($message, implode(' | ', array_slice($importer->errors, 0, 3)), icon: 'o-exclamation-triangle', position: 'toast-top toast-end');
@@ -372,15 +334,13 @@ new #[Layout('components.layouts.app')] class extends Component {
                     ? 'Vérifiez que les matricules correspondent au fichier exporté.'
                     : 'Aucune ligne de données trouvée. Vérifiez le format du fichier.';
                 $this->warning("0 élève importé, {$importer->skipped} ignoré(s).", $hint, icon: 'o-exclamation-triangle', position: 'toast-top toast-end');
-            } elseif ($grades === 0) {
+            } elseif ($importer->gradesTotal === 0) {
                 $this->warning($message, 'Les cellules de notes étaient vides — remplissez le fichier Excel avant de ré-importer.', icon: 'o-exclamation-triangle', position: 'toast-top toast-end');
             } else {
                 $this->success($message, icon: 'o-arrow-up-tray', position: 'toast-top toast-end');
             }
 
-            if ($this->selectedStudent) {
-                $this->loadOrCreateBulletin($this->selectedStudent);
-            }
+            if ($this->selectedStudent) $this->loadOrCreateBulletin($this->selectedStudent);
 
         } catch (\Maatwebsite\Excel\Validators\ValidationException $e) {
             $errors = collect($e->failures())->map(fn($f) => "Ligne {$f->row()}: " . implode(', ', $f->errors()))->toArray();
@@ -388,15 +348,11 @@ new #[Layout('components.layouts.app')] class extends Component {
         } catch (\Throwable $e) {
             $this->error('Erreur import', $e->getMessage(), icon: 'o-x-circle', position: 'toast-top toast-end');
             \Log::error('Grade import error', [
-                'message'    => $e->getMessage(),
-                'classroom'  => $this->selectedClassroom,
-                'period'     => $this->selectedPeriod,
-                'teacher_id' => $teacherId,
+                'message' => $e->getMessage(), 'classroom' => $this->selectedClassroom,
+                'period'  => $this->selectedPeriod, 'teacher_id' => $teacherId,
             ]);
         }
     }
-
-    // ── Data ──────────────────────────────────────────────────────────────────
 
     public function with(): array
     {
@@ -427,23 +383,47 @@ new #[Layout('components.layouts.app')] class extends Component {
             $classrooms = $classroomQuery->get()->map(fn($c) => ['id' => $c->id, 'name' => $c->label . ' — ' . $c->section]);
         }
 
-        // ── Subjects: STRICTLY filtered by classroom code ─────────────────────
-        // Each class (CP, CE1, CE2, CM1, CM2…) only sees its own catalogue:
-        //   - Subjects with matching classroom_code
-        //   - Plus subjects with classroom_code = NULL (global for niveau)
-        $subjects = collect();
+        // ── Subjects: section-aware filtering (matches export/import logic) ──
+        $subjects     = collect();
+        $totalMaxSum  = 0;
         if ($this->selectedStudent && $this->selectedNiveau && $this->selectedClassroom) {
-            $classCode = Classroom::find($this->selectedClassroom)?->code;
+            $classroom   = Classroom::find($this->selectedClassroom);
+            $sectionCode = $classroom?->code;
+            $levelCode   = preg_replace('/[AB]$/', '', (string) $sectionCode) ?: $sectionCode;
 
             $q = Subject::whereHas('niveau', fn($q) => $q->where('code', $this->selectedNiveau))
-                ->where(fn($q) => $q->whereNull('classroom_code')->orWhere('classroom_code', $classCode))
-                ->with(['competences' => fn($q) => $q->orderBy('order')]);
+                ->where(function ($q) use ($sectionCode, $levelCode) {
+                    $q->where('section_code', $sectionCode)
+                      ->orWhere(function ($q2) use ($levelCode) {
+                          $q2->whereNull('section_code')->where('classroom_code', $levelCode);
+                      })
+                      ->orWhere(function ($q3) {
+                          $q3->whereNull('section_code')->whereNull('classroom_code');
+                      });
+                })
+                ->with(['competences' => function ($q) use ($sectionCode) {
+                    $q->where(fn($q2) => $q2->whereNull('section_code')->orWhere('section_code', $sectionCode))
+                      ->orderBy('order');
+                }]);
 
             if ($this->shouldFilterByTeacher()) {
                 $q->whereHas('teachers', fn($q) => $q->where('users.id', $userId));
             }
 
             $subjects = $q->orderBy('order')->get();
+
+            // Compute total max for the selected class
+            foreach ($subjects as $subject) {
+                if ($subject->scale_type === 'competence') continue;
+                $hasIndividualMax = $subject->competences->whereNotNull('max_score')->isNotEmpty();
+                if ($hasIndividualMax) {
+                    foreach ($subject->competences as $c) {
+                        $totalMaxSum += (int) ($c->max_score ?? 0);
+                    }
+                } else {
+                    $totalMaxSum += (int) ($subject->max_score ?? 0);
+                }
+            }
         }
 
         $students = collect();
@@ -466,8 +446,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                     $s->t2 = $bulletins['T2'] ?? null;
                     $s->t3 = $bulletins['T3'] ?? null;
 
-                    $current              = $bulletins[$period] ?? null;
-                    $s->current_bulletin  = $current;
+                    $current             = $bulletins[$period] ?? null;
+                    $s->current_bulletin = $current;
                     $s->teacher_submitted = (! auth()->user()->hasAnyRole(['admin', 'direction']))
                         && ($current?->isTeacherSubmitted($userId) ?? false);
 
@@ -506,7 +486,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         return compact(
             'niveaux', 'classrooms', 'years', 'students', 'subjects',
             'bulletin', 'canEdit', 'teacherSubmitted',
-            'periodLocked', 'lockReason', 'progress'
+            'periodLocked', 'lockReason', 'progress', 'totalMaxSum'
         ) + [
             'periodOptions'     => PeriodEnum::options(),
             'competenceOptions' => CompetenceStatusEnum::options(),
@@ -596,59 +576,31 @@ new #[Layout('components.layouts.app')] class extends Component {
         @endforeach
     </div>
 
-    {{-- Export / Import toolbar (Excel only) --}}
+    {{-- Export / Import toolbar --}}
     <div class="card bg-base-100 shadow">
         <div class="card-body py-3 px-4">
             <div class="flex flex-wrap items-end gap-3">
-
-                {{-- Label --}}
                 <p class="font-semibold text-xs text-base-content/50 self-center w-12 shrink-0">EXCEL</p>
 
-                {{-- Export --}}
-                <x-button
-                    label="⬇ Exporter"
-                    wire:click="exportGrades"
-                    class="btn-outline btn-sm"
-                    spinner="exportGrades"
-                    icon="o-arrow-down-tray"
-                    tooltip="{{ $isDirection ? 'Export multi-feuilles (un onglet par enseignant + toutes matières)' : 'Exporter la feuille de notes' }}"
-                />
+                <x-button label="⬇ Exporter" wire:click="exportGrades" class="btn-outline btn-sm" spinner="exportGrades" icon="o-arrow-down-tray"
+                    tooltip="{{ $isDirection ? 'Export multi-feuilles (un onglet par enseignant + toutes matières)' : 'Exporter la feuille de notes' }}" />
 
-                {{-- Import --}}
                 <div class="flex items-end gap-2">
                     <div>
                         <label class="label-text text-xs mb-1 block">Fichier .xlsx</label>
-                        <input
-                            type="file"
-                            wire:model="importFile"
-                            accept=".xlsx,.xls"
-                            class="file-input file-input-sm file-input-bordered w-48"
-                        />
+                        <input type="file" wire:model="importFile" accept=".xlsx,.xls" class="file-input file-input-sm file-input-bordered w-48" />
                     </div>
-                    <x-button
-                        label="⬆ Importer"
-                        wire:click="importGrades"
-                        class="btn-primary btn-sm"
-                        spinner="importGrades"
-                        icon="o-arrow-up-tray"
-                    />
+                    <x-button label="⬆ Importer" wire:click="importGrades" class="btn-primary btn-sm" spinner="importGrades" icon="o-arrow-up-tray" />
                 </div>
 
-                {{-- Bulk submit (teachers only) --}}
                 @unless($isDirection)
                 <div class="border-l border-base-200 pl-3 ml-auto self-end">
-                    <x-button
-                        label="✈ Tout soumettre"
-                        wire:click="bulkSubmitMySubjects"
-                        class="btn-success btn-sm"
-                        spinner="bulkSubmitMySubjects"
+                    <x-button label="✈ Tout soumettre" wire:click="bulkSubmitMySubjects" class="btn-success btn-sm" spinner="bulkSubmitMySubjects"
                         icon="o-paper-airplane"
                         tooltip="Soumettre vos notes pour tous les élèves de la classe"
-                        wire:confirm="Soumettre vos notes pour tous les élèves de {{ \App\Enums\PeriodEnum::from($selectedPeriod)->label() }} ?"
-                    />
+                        wire:confirm="Soumettre vos notes pour tous les élèves de {{ \App\Enums\PeriodEnum::from($selectedPeriod)->label() }} ?" />
                 </div>
                 @endunless
-
             </div>
         </div>
     </div>
@@ -698,71 +650,131 @@ new #[Layout('components.layouts.app')] class extends Component {
                         </div>
                     </div>
 
-                @elseif($bulletin && $bulletin->status === \App\Enums\BulletinStatusEnum::REJECTED)
-                    @php $lastRejection = $bulletin->approvals->where('action','rejected')->last(); @endphp
-                    <div class="flex items-center gap-3 p-3 bg-error/10 border border-error/20 rounded-xl">
-                        <span class="text-2xl">↩</span>
-                        <div>
-                            <p class="font-semibold text-sm text-error">Bulletin rejeté — veuillez corriger</p>
-                            @if($lastRejection?->comment)
-                            <p class="text-xs text-base-content/60 italic">{{ $lastRejection->comment }}</p>
-                            @endif
-                        </div>
-                    </div>
-                    @include('livewire.bulletin._grade-form')
+                @else
+                    {{-- Grade form (existing partial) --}}
+                    @php $effectiveCanEdit = ($bulletin && in_array($bulletin->status->value, ['draft','rejected'])) ? $canEdit : false; @endphp
+                    @include('livewire.bulletin._grade-form', ['canEdit' => $effectiveCanEdit])
 
-                @elseif($teacherSubmitted)
-                    @if($progress['total'] > 0)
-                    <div class="p-3 bg-base-200 rounded-xl space-y-2">
-                        <div class="flex items-center justify-between">
-                            <p class="text-xs font-semibold">{{ $progress['submitted'] }}/{{ $progress['total'] }} enseignants ont soumis</p>
-                            @if($progress['submitted'] === $progress['total'])
-                                <span class="badge badge-success badge-sm">✓ Transmis à la pédagogie</span>
-                            @endif
+                    {{-- ── TOTAUX / MOYENNES + DIM. PERS. + OBSERVATIONS panel ── --}}
+                    <div class="rounded-xl border-2 border-indigo-200 bg-gradient-to-br from-indigo-50/60 to-purple-50/60 p-4 space-y-3">
+                        <div class="flex items-center gap-2">
+                            <span class="text-xl">📊</span>
+                            <h3 class="font-bold text-sm text-indigo-900">TOTAUX / MOYENNES &nbsp;·&nbsp; DIM. PERS. &nbsp;·&nbsp; OBSERVATIONS</h3>
                         </div>
-                        <div class="w-full bg-base-300 rounded-full h-1.5">
-                            <div class="bg-primary h-1.5 rounded-full transition-all" style="width: {{ $progress['total'] > 0 ? round($progress['submitted']/$progress['total']*100) : 0 }}%"></div>
-                        </div>
-                        <div class="flex flex-wrap gap-1.5">
-                            @foreach($progress['teachers'] as $t)
-                            <span class="badge {{ $t['submitted'] ? 'badge-success' : 'badge-warning' }} badge-xs gap-1">{{ $t['submitted'] ? '✓' : '⏳' }} {{ $t['name'] }}</span>
-                            @endforeach
-                        </div>
-                    </div>
-                    @endif
 
-                    <div class="flex items-center justify-between gap-3 bg-success/10 px-3 py-2 rounded-lg">
-                        <div class="flex items-center gap-2 text-xs text-success">
-                            <svg class="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
-                            </svg>
-                            Vos notes sont soumises — lecture seule.
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                            <x-input
+                                label="Total sur {{ $totalMaxSum ?: '?' }}"
+                                wire:model="totalManuel"
+                                type="number" step="0.5" min="0" max="{{ $totalMaxSum ?: 999 }}"
+                                placeholder="0"
+                                icon="o-calculator"
+                                :disabled="!$effectiveCanEdit" />
+
+                            <x-input
+                                label="Moyenne sur 10"
+                                wire:model="moyenne10"
+                                type="number" step="0.1" min="0" max="10"
+                                placeholder="0.0"
+                                icon="o-chart-bar"
+                                :disabled="!$effectiveCanEdit" />
+
+                            <x-input
+                                label="Moyenne de la classe sur 10"
+                                wire:model="moyenneClasse"
+                                type="number" step="0.1" min="0" max="10"
+                                placeholder="0.0"
+                                icon="o-users"
+                                :disabled="!$effectiveCanEdit" />
                         </div>
-                        @if($bulletin && in_array($bulletin->status->value, ['draft', 'submitted']))
-                        <x-button label="↩ Retirer ma soumission" wire:click="withdrawSubmission" class="btn-warning btn-xs" spinner="withdrawSubmission" tooltip="Retirer votre soumission pour corriger vos notes" wire:confirm="Retirer votre soumission ? Vos notes resteront enregistrées mais vous pourrez les modifier." />
+
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <x-input
+                                label="DISCIPLINE (Dim. Pers.)"
+                                wire:model="disciplineStatus"
+                                placeholder="Ex: A, B, B+…"
+                                icon="o-shield-check"
+                                :disabled="!$effectiveCanEdit" />
+
+                            <x-textarea
+                                label="OBSERVATIONS"
+                                wire:model="teacherComment"
+                                rows="2"
+                                placeholder="Commentaire de l'enseignant…"
+                                :disabled="!$effectiveCanEdit" />
+                        </div>
+
+                        @if($effectiveCanEdit)
+                        <div class="flex justify-end gap-2 pt-2 border-t border-indigo-100">
+                            <x-button label="💾 Enregistrer & Soumettre" wire:click="saveGrades" class="btn-primary btn-sm" spinner="saveGrades" icon="o-check" />
+                        </div>
                         @endif
                     </div>
 
-                    @include('livewire.bulletin._grade-form', ['canEdit' => false])
+                    {{-- Status badges --}}
+                    @if($bulletin && $bulletin->status === \App\Enums\BulletinStatusEnum::REJECTED)
+                        @php $lastRejection = $bulletin->approvals->where('action','rejected')->last(); @endphp
+                        <div class="flex items-center gap-3 p-3 bg-error/10 border border-error/20 rounded-xl">
+                            <span class="text-2xl">↩</span>
+                            <div>
+                                <p class="font-semibold text-sm text-error">Bulletin rejeté — veuillez corriger</p>
+                                @if($lastRejection?->comment)
+                                <p class="text-xs text-base-content/60 italic">{{ $lastRejection->comment }}</p>
+                                @endif
+                            </div>
+                        </div>
 
-                @elseif($bulletin && ! in_array($bulletin->status->value, ['draft', 'rejected']))
-                    <div class="flex items-center justify-between p-3 bg-info/10 border border-info/20 rounded-xl">
-                        <span class="text-sm">Statut : <strong class="badge {{ $bulletin->status->color() }} badge-sm ml-1">{{ $bulletin->status->label() }}</strong></span>
-                        <span class="text-xs text-base-content/50">Lecture seule</span>
-                    </div>
-                    @include('livewire.bulletin._grade-form', ['canEdit' => false])
+                    @elseif($teacherSubmitted)
+                        @if($progress['total'] > 0)
+                        <div class="p-3 bg-base-200 rounded-xl space-y-2">
+                            <div class="flex items-center justify-between">
+                                <p class="text-xs font-semibold">{{ $progress['submitted'] }}/{{ $progress['total'] }} enseignants ont soumis</p>
+                                @if($progress['submitted'] === $progress['total'])
+                                    <span class="badge badge-success badge-sm">✓ Transmis à la pédagogie</span>
+                                @endif
+                            </div>
+                            <div class="w-full bg-base-300 rounded-full h-1.5">
+                                <div class="bg-primary h-1.5 rounded-full transition-all" style="width: {{ $progress['total'] > 0 ? round($progress['submitted']/$progress['total']*100) : 0 }}%"></div>
+                            </div>
+                            <div class="flex flex-wrap gap-1.5">
+                                @foreach($progress['teachers'] as $t)
+                                <span class="badge {{ $t['submitted'] ? 'badge-success' : 'badge-warning' }} badge-xs gap-1">{{ $t['submitted'] ? '✓' : '⏳' }} {{ $t['name'] }}</span>
+                                @endforeach
+                            </div>
+                        </div>
+                        @endif
 
-                @else
-                    @if($progress['submitted'] > 0)
-                    <div class="flex items-center gap-2 p-2 bg-base-200 rounded-lg text-xs">
-                        <span class="text-base-content/60">Autres enseignants :</span>
-                        @foreach($progress['teachers'] as $t)
-                        <span class="badge {{ $t['submitted'] ? 'badge-success' : 'badge-ghost' }} badge-xs">{{ $t['submitted'] ? '✓' : '⏳' }} {{ explode(' ', $t['name'])[0] }}</span>
-                        @endforeach
-                    </div>
+                        <div class="flex items-center justify-between gap-3 bg-success/10 px-3 py-2 rounded-lg">
+                            <div class="flex items-center gap-2 text-xs text-success">
+                                <svg class="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                                </svg>
+                                Vos notes sont soumises — lecture seule.
+                            </div>
+                            @if($bulletin && in_array($bulletin->status->value, ['draft', 'submitted']))
+                            <x-button label="↩ Retirer ma soumission" wire:click="withdrawSubmission" class="btn-warning btn-xs" spinner="withdrawSubmission"
+                                tooltip="Retirer votre soumission pour corriger vos notes"
+                                wire:confirm="Retirer votre soumission ?" />
+                            @endif
+                        </div>
+
+                    @elseif($bulletin && ! in_array($bulletin->status->value, ['draft', 'rejected']))
+                        <div class="flex items-center justify-between p-3 bg-info/10 border border-info/20 rounded-xl">
+                            <span class="text-sm">Statut : <strong class="badge {{ $bulletin->status->color() }} badge-sm ml-1">{{ $bulletin->status->label() }}</strong></span>
+                            <span class="text-xs text-base-content/50">Lecture seule</span>
+                        </div>
+
+                    @else
+                        @if($progress['submitted'] > 0)
+                        <div class="flex items-center gap-2 p-2 bg-base-200 rounded-lg text-xs">
+                            <span class="text-base-content/60">Autres enseignants :</span>
+                            @foreach($progress['teachers'] as $t)
+                            <span class="badge {{ $t['submitted'] ? 'badge-success' : 'badge-ghost' }} badge-xs">{{ $t['submitted'] ? '✓' : '⏳' }} {{ explode(' ', $t['name'])[0] }}</span>
+                            @endforeach
+                        </div>
+                        @endif
                     @endif
 
-                    @include('livewire.bulletin._grade-form', ['canEdit' => $canEdit])
                 @endif
 
             </div>
