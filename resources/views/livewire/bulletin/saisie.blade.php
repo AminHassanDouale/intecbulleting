@@ -122,14 +122,15 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     /**
      * ── Niveau-aware summary scale (drives form labels & validation) ──
-     * CP/CE1  → /140 + /10   (trois colonnes : Total/140, Moy/10, Moy classe/10)
-     * CE2/CM* → /200 + /20   (trois colonnes : Moy classe/20, Moy/20, Total/200)
+     * CP        → /140 + /10   (trois colonnes : Total/140, Moy/10, Moy classe/10)
+     * CE1/CE2/CM* → /200 + /20 (trois colonnes : Moy classe/20, Moy/20, Total/200)
      */
     public function getSummaryScaleProperty(): array
     {
         $code = strtoupper(trim((string) $this->selectedNiveau));
 
-        if (in_array($code, ['CP'], true)) {
+        // CP only → /140 + /10
+        if ($code === 'CP') {
             return [
                 'total_max'         => 140,
                 'moyenne_max'       => 10,
@@ -138,7 +139,8 @@ new #[Layout('components.layouts.app')] class extends Component {
             ];
         }
 
-        if (in_array($code, ['CE2', 'CM1', 'CM2','CE1'], true)) {
+        // CE1, CE2, CM1, CM2 → /200 + /20
+        if (in_array($code, ['CE1', 'CE2', 'CM1', 'CM2'], true)) {
             return [
                 'total_max'          => 200,
                 'moyenne_max'        => 20,
@@ -805,7 +807,7 @@ new #[Layout('components.layouts.app')] class extends Component {
 
                     {{-- ── TOTAUX / MOYENNES + DIM. PERS. + OBSERVATIONS panel (level-aware) ── --}}
                     @php
-                        $isCpCe1   = in_array(strtoupper((string)$selectedNiveau), ['CP','CE1'], true);
+                        $isCp      = strtoupper((string)$selectedNiveau) === 'CP';
                         $totalMax  = $summaryScale['total_max'] ?: $totalMaxSum;
                         $moyMax    = $summaryScale['moyenne_max'];
                         $moyClsMax = $summaryScale['moyenne_classe_max'];
@@ -818,8 +820,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                             <span class="badge badge-ghost badge-xs">Niveau {{ $selectedNiveau }}</span>
                         </div>
 
-                        @if($isCpCe1)
-                        {{-- CP / CE1 layout: Total/140 — Moyenne/10 — Moyenne classe/10 --}}
+                        @if($isCp)
+                        {{-- CP layout: Total/140 — Moyenne/10 — Moyenne classe/10 --}}
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
                             <x-input
                                 label="Total sur {{ $totalMax ?: '?' }}"
@@ -846,7 +848,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 :disabled="!$effectiveCanEdit" />
                         </div>
                         @else
-                        {{-- CE2 / CM1 / CM2 layout: Moyenne classe/20 — Moyenne/20 — Total/200 --}}
+                        {{-- CE1 / CE2 / CM1 / CM2 layout: Moyenne classe/20 — Moyenne/20 — Total/200 --}}
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
                             <x-input
                                 label="Moyenne de la classe sur {{ $moyClsMax }}"

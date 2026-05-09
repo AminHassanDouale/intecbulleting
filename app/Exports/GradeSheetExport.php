@@ -24,8 +24,8 @@ use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
  *
  * Summary column layout depends on the niveau code:
  *
- *   CP, CE1            → [Total sur 140] [Moyenne sur 10] [Moyenne de la classe sur 10]
- *   CE2, CM1, CM2      → [Moyenne de la classe sur 20] [Moyenne sur 20] [Total sur 200]
+ *   CP                 → [Total sur 140] [Moyenne sur 10] [Moyenne de la classe sur 10]
+ *   CE1, CE2, CM1, CM2 → [Moyenne de la classe sur 20] [Moyenne sur 20] [Total sur 200]
  *
  * Each layout is followed by:
  *   [DISCIPLINE] [OBSERVATIONS]
@@ -73,8 +73,8 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
     {
         $code = strtoupper(trim($niveauCode));
 
-        // CP and CE1 → /140 + /10 layout
-        if (in_array($code, ['CP', 'CE1'], true)) {
+        // CP only → /140 + /10 layout
+        if ($code === 'CP') {
             return [
                 'columns' => [
                     ['key' => 'total_manuel',   'label' => 'Total sur 140',                'max' => 140, 'numeric' => true],
@@ -86,9 +86,9 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
             ];
         }
 
-        // CE2, CM1, CM2 → /20 + /200 layout
+        // CE1, CE2, CM1, CM2 → /20 + /200 layout
         // (order: Moyenne classe → Moyenne /20 → Total /200)
-        if (in_array($code, ['CE2', 'CM1', 'CM2'], true)) {
+        if (in_array($code, ['CE1', 'CE2', 'CM1', 'CM2'], true)) {
             return [
                 'columns' => [
                     ['key' => 'moyenne_classe', 'label' => 'Moyenne de la classe sur 20',   'max' => 20,  'numeric' => true],
