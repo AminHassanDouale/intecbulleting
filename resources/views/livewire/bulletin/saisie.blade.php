@@ -121,26 +121,20 @@ new #[Layout('components.layouts.app')] class extends Component {
     }
 
     /**
-     * ── Niveau-aware summary scale (drives form labels & validation) ──
-     * CP        → /140 + /10   (trois colonnes : Total/140, Moy/10, Moy classe/10)
-     * CE1/CE2/CM* → /200 + /20 (trois colonnes : Moy classe/20, Moy/20, Total/200)
+     * Centralised niveau → scale resolver.
      *
-     * Uses prefix matching so codes like "CE1A", "CM2 ", "CE1_B" still resolve.
-     */
-    public function getSummaryScaleProperty(): array
-    {
-        return $this->resolveSummaryScale($this->selectedNiveau);
-    }
-
-    /**
-     * Centralised niveau → scale resolver. Used by both the magic property
-     * AND the inline computation in with(), to guarantee consistency.
+     * Handles section codes: CPA, CPB, CE1A, CE1B, CE2A, CE2B, CM1A, CM2A, etc.
+     *
+     * Summary column order is IDENTICAL for all levels:
+     *   [Total sur X]  [Moyenne sur Y]  [Moyenne de la classe sur Y]
+     *
+     *   CP (A or B) → X=140, Y=10
+     *   CE1/CE2/CM1/CM2 (any section) → X=200, Y=20
      */
     public static function resolveSummaryScale(?string $niveauCode): array
     {
         $upper = preg_replace('/[^A-Z0-9]/', '', strtoupper(trim((string) $niveauCode)));
 
-        // Order: longer/more specific first
         $key = null;
         foreach (['CM2', 'CM1', 'CE2', 'CE1', 'CP'] as $prefix) {
             if (str_starts_with($upper, $prefix)) {
@@ -171,11 +165,17 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         return [
             'total_max'          => 0,
-            'moyenne_max'        => 10,
-            'moyenne_classe_max' => 10,
+            'moyenne_max'        => 20,
+            'moyenne_classe_max' => 20,
             'group_label'        => 'TOTAUX / MOYENNES',
             'matched_key'        => null,
         ];
+    }
+
+    /** Magic property used by some blade references. */
+    public function getSummaryScaleProperty(): array
+    {
+        return self::resolveSummaryScale($this->selectedNiveau);
     }
 
     public function saveGrades(): void
@@ -190,14 +190,39 @@ new #[Layout('components.layouts.app')] class extends Component {
             return;
         }
 
+        // Validate only the summary fields (total / moyenne / moyenne_classe)
+        // against their niveau-specific maximums to prevent DB decimal overflow.
+        // Individual grade scores are NOT validated here.
+        $scale     = self::resolveSummaryScale($this->selectedNiveau);
+        $totalMax  = $scale['total_max'] ?: 9999;
+        $moyMax    = $scale['moyenne_max'];
+        $moyClsMax = $scale['moyenne_classe_max'];
+
+        $totalVal     = $this->totalManuel   !== '' ? (float) $this->totalManuel   : null;
+        $moyVal       = $this->moyenne10     !== '' ? (float) $this->moyenne10     : null;
+        $moyClasseVal = $this->moyenneClasse !== '' ? (float) $this->moyenneClasse : null;
+
+        if ($totalVal !== null && ($totalVal < 0 || $totalVal > $totalMax + 0.01)) {
+            $this->error('Total invalide.', "La valeur doit être entre 0 et {$totalMax}.", icon: 'o-x-circle', position: 'toast-top toast-end');
+            return;
+        }
+        if ($moyVal !== null && ($moyVal < 0 || $moyVal > $moyMax + 0.01)) {
+            $this->error('Moyenne invalide.', "La valeur doit être entre 0 et {$moyMax}.", icon: 'o-x-circle', position: 'toast-top toast-end');
+            return;
+        }
+        if ($moyClasseVal !== null && ($moyClasseVal < 0 || $moyClasseVal > $moyClsMax + 0.01)) {
+            $this->error('Moyenne classe invalide.', "La valeur doit être entre 0 et {$moyClsMax}.", icon: 'o-x-circle', position: 'toast-top toast-end');
+            return;
+        }
+
         app(SaveGradeAction::class)->execute($bulletin, $this->grades);
 
         $bulletin->update([
             'teacher_comment'   => $this->teacherComment   !== '' ? $this->teacherComment   : null,
             'discipline_status' => $this->disciplineStatus !== '' ? $this->disciplineStatus : null,
-            'total_manuel'      => $this->totalManuel      !== '' ? (float) $this->totalManuel   : null,
-            'moyenne_10'        => $this->moyenne10        !== '' ? (float) $this->moyenne10     : null,
-            'moyenne_classe'    => $this->moyenneClasse    !== '' ? (float) $this->moyenneClasse : null,
+            'total_manuel'      => $totalVal,
+            'moyenne_10'        => $moyVal,
+            'moyenne_classe'    => $moyClasseVal,
         ]);
 
         if ($isDirection) {
@@ -280,15 +305,6 @@ new #[Layout('components.layouts.app')] class extends Component {
             : $this->warning('Aucun bulletin à soumettre.', 'Tous déjà soumis ou verrouillés.', icon: 'o-information-circle', position: 'toast-top toast-end');
     }
 
-    /**
-     * Reset (réinitialiser) the entire trimester for the selected classroom:
-     *   - only bulletins still in `draft` (Brouillon) status are touched
-     *   - all grades for that bulletin/period are deleted
-     *   - manual fields (total/moyenne/discipline/observations) are cleared
-     *   - bulletin row is kept (status remains `draft`)
-     *
-     * Bulletins in any other status (submitted, approved, published, …) are left intact.
-     */
     public function resetTrimester(): void
     {
         if (! $this->selectedClassroom || ! $this->selectedPeriod || ! $this->selectedYear) {
@@ -316,19 +332,15 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         \DB::transaction(function () use ($bulletins, $userId, $isDirection, &$bulletinsCount, &$gradesDeleted) {
             foreach ($bulletins as $bulletin) {
-                // Permission gate: teachers can only reset bulletins they could edit.
                 if (! $isDirection && ! $bulletin->canTeacherEdit($userId)) continue;
 
-                $count          = $bulletin->grades()->count();
-                $gradesDeleted += $count;
+                $gradesDeleted += $bulletin->grades()->count();
                 $bulletin->grades()->delete();
 
-                // Clear teacher submissions so the workflow restarts cleanly.
                 if (method_exists($bulletin, 'teacherSubmissions')) {
                     $bulletin->teacherSubmissions()->delete();
                 }
 
-                // Clear manual summary + meta fields, keep bulletin in draft.
                 $bulletin->update([
                     'teacher_comment'       => null,
                     'discipline_status'     => null,
@@ -527,7 +539,6 @@ new #[Layout('components.layouts.app')] class extends Component {
             $classrooms = $classroomQuery->get()->map(fn($c) => ['id' => $c->id, 'name' => $c->label . ' — ' . $c->section]);
         }
 
-        // ── Subjects: section-aware filtering (matches export/import logic) ──
         $subjects     = collect();
         $totalMaxSum  = 0;
         if ($this->selectedStudent && $this->selectedNiveau && $this->selectedClassroom) {
@@ -626,8 +637,6 @@ new #[Layout('components.layouts.app')] class extends Component {
             }
         }
 
-        // ── Reset-trimester button visibility ──
-        // Show iff at least one bulletin in this classroom/period is still DRAFT
         $resetCount = 0;
         if ($this->selectedClassroom && $this->selectedPeriod && $this->selectedYear) {
             $resetCount = Bulletin::where('classroom_id', $this->selectedClassroom)
@@ -637,7 +646,6 @@ new #[Layout('components.layouts.app')] class extends Component {
                 ->count();
         }
 
-        // ── Niveau-aware summary scale (computed inline so it always reaches the view) ──
         $summaryScale = self::resolveSummaryScale($this->selectedNiveau);
 
         \Log::debug('Saisie summary scale', [
@@ -757,7 +765,6 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <x-button label="⬆ Importer" wire:click="importGrades" class="btn-primary btn-sm" spinner="importGrades" icon="o-arrow-up-tray" />
                 </div>
 
-                {{-- Reset trimester (only when at least one bulletin is still draft) --}}
                 @if($resetCount > 0)
                 <div class="border-l border-base-200 pl-3">
                     <x-button
@@ -829,20 +836,15 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </div>
 
                 @else
-                    {{-- Grade form (existing partial) --}}
                     @php $effectiveCanEdit = ($bulletin && in_array($bulletin->status->value, ['draft','rejected'])) ? $canEdit : false; @endphp
                     @include('livewire.bulletin._grade-form', ['canEdit' => $effectiveCanEdit])
 
-                    {{-- ── TOTAUX / MOYENNES + DIM. PERS. + OBSERVATIONS panel (level-aware) ── --}}
+                    {{-- ── TOTAUX / MOYENNES + DIM. PERS. + OBSERVATIONS ── --}}
                     @php
                         $matchedKey = $summaryScale['matched_key'] ?? null;
-                        $isCp       = $matchedKey === 'CP';
-                        // Hard binding to the niveau scale — never fall back to the
-                        // competence-sum (which can be 220 for some CE1/CE2 classes).
-                        // Only fall back when the niveau truly couldn't be resolved.
-                        $totalMax  = (int) ($summaryScale['total_max'] ?? 0);
+                        $totalMax   = (int) ($summaryScale['total_max'] ?? 0);
                         if ($totalMax === 0 && $matchedKey === null) {
-                            $totalMax = $totalMaxSum; // truly unknown niveau → use sum
+                            $totalMax = $totalMaxSum;
                         }
                         $moyMax    = $summaryScale['moyenne_max'];
                         $moyClsMax = $summaryScale['moyenne_classe_max'];
@@ -853,19 +855,17 @@ new #[Layout('components.layouts.app')] class extends Component {
                             <span class="text-xl">📊</span>
                             <h3 class="font-bold text-sm text-indigo-900">{{ $summaryScale['group_label'] }} &nbsp;·&nbsp; DIM. PERS. &nbsp;·&nbsp; OBSERVATIONS</h3>
                             <span class="badge badge-ghost badge-xs">Niveau {{ $selectedNiveau }}</span>
-                            {{-- Debug badge: shows what the resolver matched. Remove once confirmed. --}}
-                            <span class="badge {{ $matchedKey ? 'badge-info' : 'badge-warning' }} badge-xs">
-                                {{ $matchedKey ? "→ {$matchedKey} (Total/{$totalMax})" : "✗ niveau non reconnu (sum={$totalMaxSum})" }}
-                            </span>
                         </div>
 
-                        @if($isCp)
-                        {{-- CP layout: Total/140 — Moyenne/10 — Moyenne classe/10 --}}
+                        {{--
+                            Column order is IDENTICAL for all levels:
+                            [Total sur X]  [Moyenne sur Y]  [Moyenne de la classe sur Y]
+                        --}}
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
                             <x-input
                                 label="Total sur {{ $totalMax ?: '?' }}"
                                 wire:model="totalManuel"
-                                type="number" step="0.5" min="0" max="{{ $totalMax ?: 999 }}"
+                                type="number" step="0.5" min="0" max="{{ $totalMax ?: 9999 }}"
                                 placeholder="0"
                                 icon="o-calculator"
                                 :disabled="!$effectiveCanEdit" />
@@ -886,34 +886,6 @@ new #[Layout('components.layouts.app')] class extends Component {
                                 icon="o-users"
                                 :disabled="!$effectiveCanEdit" />
                         </div>
-                        @else
-                        {{-- CE1 / CE2 / CM1 / CM2 layout: Moyenne classe/20 — Moyenne/20 — Total/200 --}}
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-                            <x-input
-                                label="Moyenne de la classe sur {{ $moyClsMax }}"
-                                wire:model="moyenneClasse"
-                                type="number" step="0.1" min="0" max="{{ $moyClsMax }}"
-                                placeholder="0.0"
-                                icon="o-users"
-                                :disabled="!$effectiveCanEdit" />
-
-                            <x-input
-                                label="Moyenne sur {{ $moyMax }}"
-                                wire:model="moyenne10"
-                                type="number" step="0.1" min="0" max="{{ $moyMax }}"
-                                placeholder="0.0"
-                                icon="o-chart-bar"
-                                :disabled="!$effectiveCanEdit" />
-
-                            <x-input
-                                label="Total sur {{ $totalMax ?: '?' }}"
-                                wire:model="totalManuel"
-                                type="number" step="0.5" min="0" max="{{ $totalMax ?: 999 }}"
-                                placeholder="0"
-                                icon="o-calculator"
-                                :disabled="!$effectiveCanEdit" />
-                        </div>
-                        @endif
 
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                             <x-input

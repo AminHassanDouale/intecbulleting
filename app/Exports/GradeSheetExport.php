@@ -22,18 +22,14 @@ use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
 /**
  * GradeSheetExport — section-aware, level-aware manual summary columns.
  *
- * Summary column layout depends on the niveau code:
+ * Summary column layout (SAME order for ALL levels):
+ *   CP  (A or B) → [Total sur 140] [Moyenne sur 10]  [Moyenne de la classe sur 10]
+ *   CE1 (A or B) → [Total sur 200] [Moyenne sur 20]  [Moyenne de la classe sur 20]
+ *   CE2 (A or B) → [Total sur 200] [Moyenne sur 20]  [Moyenne de la classe sur 20]
+ *   CM1 A        → [Total sur 200] [Moyenne sur 20]  [Moyenne de la classe sur 20]
+ *   CM2 A        → [Total sur 200] [Moyenne sur 20]  [Moyenne de la classe sur 20]
  *
- *   CP                 → [Total sur 140] [Moyenne sur 10] [Moyenne de la classe sur 10]
- *   CE1, CE2, CM1, CM2 → [Moyenne de la classe sur 20] [Moyenne sur 20] [Total sur 200]
- *
- * Each layout is followed by:
- *   [DISCIPLINE] [OBSERVATIONS]
- *
- * Subjects are filtered by the classroom's `code` against:
- *   1) subjects.section_code = classroom.code      (e.g. "CPA")
- *   2) subjects.classroom_code = level code        (e.g. "CP")  — only when section_code is NULL
- *   3) global subjects (both columns NULL) within the niveau
+ * Each layout is followed by: [DISCIPLINE] [OBSERVATIONS]
  */
 class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWidths
 {
@@ -59,56 +55,65 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
         $this->loadSubjectsAndCompetences();
     }
 
+    // ── Niveau key resolver (handles section suffixes: CPA, CPB, CE1A, CE2B…) ─
+
+    public static function resolveNiveauKey(string $niveauCode): ?string
+    {
+        $upper = preg_replace('/[^A-Z0-9]/', '', strtoupper(trim($niveauCode)));
+        foreach (['CM2', 'CM1', 'CE2', 'CE1', 'CP'] as $prefix) {
+            if (str_starts_with($upper, $prefix)) {
+                return $prefix;
+            }
+        }
+        return null;
+    }
+
     // ── Layout configuration per niveau ──────────────────────────────────────
 
     /**
-     * Returns the ordered list of summary sub-columns for this niveau.
+     * Consistent column ORDER for all levels:
+     *   [Total sur X] [Moyenne sur Y] [Moyenne de la classe sur Y]
      *
-     * Each entry: ['key' => string, 'label' => string, 'short' => string]
-     *   key   = canonical identifier used by the importer & bulletin column
-     *   label = full header text written to the file (row 4)
-     *   short = used in tooltips/UI; not strictly required
+     * CP  → X=140, Y=10
+     * CE*/CM* → X=200, Y=20
      */
     private function buildSummaryLayout(string $niveauCode): array
     {
-        $code = strtoupper(trim($niveauCode));
+        $key = self::resolveNiveauKey($niveauCode);
 
-        // CP only → /140 + /10 layout
-        if ($code === 'CP') {
+        if ($key === 'CP') {
             return [
                 'columns' => [
-                    ['key' => 'total_manuel',   'label' => 'Total sur 140',                'max' => 140, 'numeric' => true],
-                    ['key' => 'moyenne_10',     'label' => 'Moyenne sur 10',                'max' => 10,  'numeric' => true],
-                    ['key' => 'moyenne_classe', 'label' => 'Moyenne de la classe sur 10',   'max' => 10,  'numeric' => true],
+                    ['key' => 'total_manuel',   'label' => 'Total sur 140',               'max' => 140],
+                    ['key' => 'moyenne_10',      'label' => 'Moyenne sur 10',              'max' => 10],
+                    ['key' => 'moyenne_classe',  'label' => 'Moyenne de la classe sur 10', 'max' => 10],
                 ],
                 'group_label' => 'TOTAUX / MOYENNES',
-                'scale'       => '10',
+                'matched_key' => 'CP',
             ];
         }
 
-        // CE1, CE2, CM1, CM2 → /20 + /200 layout
-        // (order: Moyenne classe → Moyenne /20 → Total /200)
-        if (in_array($code, ['CE1', 'CE2', 'CM1', 'CM2'], true)) {
+        if (in_array($key, ['CE1', 'CE2', 'CM1', 'CM2'], true)) {
             return [
                 'columns' => [
-                    ['key' => 'moyenne_classe', 'label' => 'Moyenne de la classe sur 20',   'max' => 20,  'numeric' => true],
-                    ['key' => 'moyenne_10',     'label' => 'Moyenne sur 20',                'max' => 20,  'numeric' => true],
-                    ['key' => 'total_manuel',   'label' => 'Total sur 200',                 'max' => 200, 'numeric' => true],
+                    ['key' => 'total_manuel',   'label' => 'Total sur 200',               'max' => 200],
+                    ['key' => 'moyenne_10',      'label' => 'Moyenne sur 20',              'max' => 20],
+                    ['key' => 'moyenne_classe',  'label' => 'Moyenne de la classe sur 20', 'max' => 20],
                 ],
                 'group_label' => 'TOTAUX / MOYENNES',
-                'scale'       => '20',
+                'matched_key' => $key,
             ];
         }
 
-        // Fallback (preserves previous behaviour)
+        // Fallback — unknown niveau
         return [
             'columns' => [
-                ['key' => 'total_manuel',   'label' => 'Total sur ' . ($this->totalMaxScore ?: '?'), 'max' => 0,  'numeric' => true],
-                ['key' => 'moyenne_10',     'label' => 'Moyenne sur 10',                              'max' => 10, 'numeric' => true],
-                ['key' => 'moyenne_classe', 'label' => 'Moyenne de la classe sur 10',                 'max' => 10, 'numeric' => true],
+                ['key' => 'total_manuel',   'label' => 'Total sur ?',                  'max' => 0],
+                ['key' => 'moyenne_10',      'label' => 'Moyenne sur 10',              'max' => 10],
+                ['key' => 'moyenne_classe',  'label' => 'Moyenne de la classe sur 10', 'max' => 10],
             ],
             'group_label' => 'TOTAUX / MOYENNES',
-            'scale'       => '10',
+            'matched_key' => null,
         ];
     }
 
@@ -116,8 +121,7 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
 
     private function loadSubjectsAndCompetences(): void
     {
-        $classroom = Classroom::findOrFail($this->classroomId);
-
+        $classroom   = Classroom::findOrFail($this->classroomId);
         $sectionCode = (string) $classroom->code;
         $levelCode   = preg_replace('/[AB]$/', '', $sectionCode) ?: $sectionCode;
 
@@ -171,8 +175,8 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
 
         $this->summaryStartCol = $colIndex;
 
-        // Refresh the fallback "Total sur ?" label with computed total
-        if (! in_array(strtoupper(trim($this->niveauCode)), ['CP', 'CE1', 'CE2', 'CM1', 'CM2'], true)) {
+        // Update fallback "Total sur ?" label with computed total
+        if ($this->summaryLayout['matched_key'] === null) {
             foreach ($this->summaryLayout['columns'] as $i => $col) {
                 if ($col['key'] === 'total_manuel') {
                     $this->summaryLayout['columns'][$i]['label'] = 'Total sur ' . ($this->totalMaxScore ?: '?');
@@ -185,10 +189,12 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
             'section_code'   => $sectionCode,
             'level_code'     => $levelCode,
             'niveau'         => $this->niveauCode,
+            'matched_key'    => $this->summaryLayout['matched_key'],
             'subjects_count' => $this->subjects->count(),
             'teacher_id'     => $this->teacherId,
             'totalMaxScore'  => $this->totalMaxScore,
             'summary_keys'   => array_column($this->summaryLayout['columns'], 'key'),
+            'summary_labels' => array_column($this->summaryLayout['columns'], 'label'),
         ]);
     }
 
@@ -204,10 +210,9 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
         return $this->col($this->summaryStartCol + $offset);
     }
 
-    /** Number of summary "totaux/moyennes" sub-columns (excluding discipline + obs) */
     private function summaryCount(): int
     {
-        return count($this->summaryLayout['columns']);
+        return count($this->summaryLayout['columns']); // always 3
     }
 
     private function disciplineCol(): string { return $this->summaryCol($this->summaryCount()); }
@@ -221,11 +226,9 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
         $classroom = Classroom::find($this->classroomId);
         $year      = \App\Models\AcademicYear::find($this->academicYearId);
 
-        $periodLabel = $this->periodLongLabel(PeriodEnum::from($this->period));
-
-        $summaryCount  = $this->summaryCount();          // 3
-        // last 1-based col = summaryStartCol + summaryCount + 1 (discipline + obs)
-        $totalColCount = $this->summaryStartCol + $summaryCount + 1;
+        $periodLabel   = $this->periodLongLabel(PeriodEnum::from($this->period));
+        $summaryCount  = $this->summaryCount();
+        $totalColCount = $this->summaryStartCol + $summaryCount + 1; // +discipline +obs
 
         // ── Row 1: Title ──────────────────────────────────────────────────────
         $titleRow    = array_fill(0, $totalColCount, '');
@@ -250,13 +253,12 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
             }
             $subjectRow[$info['start_col'] - 1] = $subjectName;
         }
-        // Group cells
-        $subjectRow[$this->summaryStartCol - 1]                       = $this->summaryLayout['group_label']; // TOTAUX / MOYENNES
-        $subjectRow[$this->summaryStartCol + $summaryCount - 1]       = 'DIM. PERS.';
-        $subjectRow[$this->summaryStartCol + $summaryCount + 1 - 1]   = 'OBSERVATIONS';
+        $subjectRow[$this->summaryStartCol - 1]                     = $this->summaryLayout['group_label'];
+        $subjectRow[$this->summaryStartCol + $summaryCount - 1]     = 'DIM. PERS.';
+        $subjectRow[$this->summaryStartCol + $summaryCount + 1 - 1] = 'OBSERVATIONS';
         $rows[] = $subjectRow;
 
-        // ── Row 4: Identity labels + competence labels + summary sub-labels ──
+        // ── Row 4: Identity + competence labels + summary sub-labels ──────────
         $codeRow = ['Matricule', 'Nom Complet', 'Date Naissance'];
         foreach ($this->subjects as $subject) {
             foreach ($subject->competences as $competence) {
@@ -277,7 +279,6 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
                 $codeRow[] = $label;
             }
         }
-        // Summary sub-labels (level-aware)
         foreach ($this->summaryLayout['columns'] as $col) {
             $codeRow[] = $col['label'];
         }
@@ -313,7 +314,6 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
                     : '',
             ];
 
-            // Competence grades — pre-filled if already saved
             foreach ($this->subjects as $subject) {
                 foreach ($subject->competences as $competence) {
                     $cell  = '';
@@ -333,7 +333,7 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
                 }
             }
 
-            // Summary columns in the order defined by the layout
+            // Summary columns in the defined order
             foreach ($this->summaryLayout['columns'] as $col) {
                 $value = $bulletin?->{$col['key']};
                 $row[] = $value !== null && $value !== '' ? (string) $value : '';
@@ -352,19 +352,19 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
 
     public function styles(Worksheet $sheet): array
     {
-        $lastCol     = $this->obsCol();
-        $lastRow     = $sheet->getHighestRow();
-        $titleR      = 1;
-        $periodR     = 2;
-        $subjectR    = 3;
-        $codeR       = 4;
-        $dataStart   = 5;
+        $lastCol   = $this->obsCol();
+        $lastRow   = $sheet->getHighestRow();
+        $titleR    = 1;
+        $periodR   = 2;
+        $subjectR  = 3;
+        $codeR     = 4;
+        $dataStart = 5;
 
-        $firstGradeCol  = $this->col(4);
-        $summaryFirstC  = $this->summaryCol(0);
-        $summaryLastC   = $this->summaryCol($this->summaryCount() - 1);
-        $disciplineC    = $this->disciplineCol();
-        $obsC           = $this->obsCol();
+        $firstGradeCol = $this->col(4);
+        $summaryFirstC = $this->summaryCol(0);
+        $summaryLastC  = $this->summaryCol($this->summaryCount() - 1);
+        $disciplineC   = $this->disciplineCol();
+        $obsC          = $this->obsCol();
 
         // Row 1 — Title
         $sheet->mergeCells("A{$titleR}:{$lastCol}{$titleR}");
@@ -389,7 +389,6 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
 
         // Row 3 — Subject groups
         $sheet->mergeCells("A{$subjectR}:C{$subjectR}");
-
         foreach ($this->subjectMap as $info) {
             $s = $this->col($info['start_col']);
             $e = $this->col($info['end_col']);
@@ -397,11 +396,9 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
                 $sheet->mergeCells("{$s}{$subjectR}:{$e}{$subjectR}");
             }
         }
-        // Merge TOTAUX / MOYENNES across its sub-columns
         if ($summaryFirstC !== $summaryLastC) {
             $sheet->mergeCells("{$summaryFirstC}{$subjectR}:{$summaryLastC}{$subjectR}");
         }
-
         $sheet->getStyle("A{$subjectR}:{$lastCol}{$subjectR}")->applyFromArray([
             'font'      => ['bold' => true, 'size' => 10, 'color' => ['rgb' => 'FFFFFF']],
             'fill'      => ['fillType' => Fill::FILL_SOLID, 'color' => ['rgb' => '1d4ed8']],
@@ -441,14 +438,12 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
 
         // Rows 5+ — student data
         if ($lastRow >= $dataStart) {
-            // Identity A-C
             $sheet->getStyle("A{$dataStart}:C{$lastRow}")->applyFromArray([
                 'font'      => ['size' => 10],
                 'fill'      => ['fillType' => Fill::FILL_SOLID, 'color' => ['rgb' => 'f8fafc']],
                 'alignment' => ['vertical' => Alignment::VERTICAL_CENTER],
             ]);
 
-            // Grade cells — yellow
             foreach ($this->subjectMap as $info) {
                 $s = $this->col($info['start_col']);
                 $e = $this->col($info['end_col']);
@@ -459,7 +454,6 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
                 ]);
             }
 
-            // Summary sub-columns — alternating purple shades
             $palette = ['ede9fe', 'ddd6fe', 'ede9fe', 'ddd6fe', 'ede9fe'];
             foreach ($this->summaryLayout['columns'] as $i => $_col) {
                 $c = $this->summaryCol($i);
@@ -470,13 +464,11 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
                 ]);
             }
 
-            // DISCIPLINE
             $sheet->getStyle("{$disciplineC}{$dataStart}:{$disciplineC}{$lastRow}")->applyFromArray([
                 'fill'      => ['fillType' => Fill::FILL_SOLID, 'color' => ['rgb' => 'e0e7ff']],
                 'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER],
                 'font'      => ['bold' => true, 'size' => 10],
             ]);
-            // OBSERVATIONS
             $sheet->getStyle("{$obsC}{$dataStart}:{$obsC}{$lastRow}")->applyFromArray([
                 'fill'      => ['fillType' => Fill::FILL_SOLID, 'color' => ['rgb' => 'f0fdf4']],
                 'alignment' => ['vertical' => Alignment::VERTICAL_CENTER, 'wrapText' => true, 'horizontal' => Alignment::HORIZONTAL_LEFT],
@@ -552,9 +544,8 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
             }
         }
 
-        // Summary widths — generous for "Moyenne de la classe sur XX"
         foreach ($this->summaryLayout['columns'] as $i => $col) {
-            $widths[$this->summaryCol($i)] = str_contains(strtolower($col['label']), 'classe') ? 20 : 14;
+            $widths[$this->summaryCol($i)] = str_contains(strtolower($col['label']), 'classe') ? 22 : 15;
         }
         $widths[$this->disciplineCol()] = 14;
         $widths[$this->obsCol()]        = 38;

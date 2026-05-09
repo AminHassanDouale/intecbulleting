@@ -8,6 +8,7 @@ use App\Models\BulletinGrade;
 use App\Models\Classroom;
 use App\Models\Student;
 use App\Models\Subject;
+use App\Exports\GradeSheetExport;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -17,14 +18,14 @@ use Maatwebsite\Excel\Concerns\WithStartRow;
 /**
  * GradeSheetImport — section-aware, level-aware manual summary detection.
  *
- * Detects the following manual summary columns regardless of order:
- *   - "Total sur 140" / "Total sur 200" / "Total sur …" → bulletin->total_manuel
- *   - "Moyenne sur 10" / "Moyenne sur 20"               → bulletin->moyenne_10
- *   - "Moyenne de la classe sur 10" / "… sur 20"        → bulletin->moyenne_classe
- *   - "DISCIPLINE"                                       → bulletin->discipline_status
- *   - "OBSERVATIONS" / "Commentaire"                     → bulletin->teacher_comment
+ * Grade score bounds are NOT validated here — values are stored as-is.
+ * Only summary fields (total, moyenne, moyenne_classe) are range-checked
+ * against their niveau-specific maximum to prevent DB decimal overflow.
  *
- * Subjects loaded match GradeSheetExport's logic.
+ * Column order (matches GradeSheetExport for all levels):
+ *   CP      → Total sur 140 | Moyenne sur 10  | Moyenne de la classe sur 10
+ *   CE1/2   → Total sur 200 | Moyenne sur 20  | Moyenne de la classe sur 20
+ *   CM1/2   → Total sur 200 | Moyenne sur 20  | Moyenne de la classe sur 20
  */
 class GradeSheetImport implements ToArray, WithStartRow
 {
@@ -41,11 +42,11 @@ class GradeSheetImport implements ToArray, WithStartRow
     private array $columnMap = [];
 
     /** Routed manual columns (0-based indices) */
-    private ?int $totalCol         = null;
-    private ?int $moy10Col         = null;
-    private ?int $moyClasseCol     = null;
-    private ?int $disciplineCol    = null;
-    private ?int $observationsCol  = null;
+    private ?int $totalCol        = null;
+    private ?int $moy10Col        = null;
+    private ?int $moyClasseCol    = null;
+    private ?int $disciplineCol   = null;
+    private ?int $observationsCol = null;
 
     public function __construct(
         private int    $classroomId,
@@ -112,6 +113,33 @@ class GradeSheetImport implements ToArray, WithStartRow
         return strtolower(trim($subjectName)) . '::' . strtolower(trim($competenceCode));
     }
 
+    /**
+     * Niveau prefix detection — mirrors GradeSheetExport::resolveNiveauKey().
+     * Handles section codes like CPA, CPB, CE1A, CE2B, CM1A, CM2A.
+     */
+    private function resolvedNiveauKey(): ?string
+    {
+        return GradeSheetExport::resolveNiveauKey($this->niveauCode);
+    }
+
+    /**
+     * Returns the summary column max values for range-checking summary fields only.
+     * Grade scores themselves are NOT bounded here.
+     */
+    private function summaryBounds(): array
+    {
+        $key = $this->resolvedNiveauKey();
+
+        if ($key === 'CP') {
+            return ['total_max' => 140, 'moy_max' => 10, 'moy_cls_max' => 10];
+        }
+        if (in_array($key, ['CE1', 'CE2', 'CM1', 'CM2'], true)) {
+            return ['total_max' => 200, 'moy_max' => 20, 'moy_cls_max' => 20];
+        }
+        // Unknown niveau — use generous bounds to avoid false rejections
+        return ['total_max' => 9999, 'moy_max' => 9999, 'moy_cls_max' => 9999];
+    }
+
     // ── Main entry ───────────────────────────────────────────────────────────
 
     public function array(array $allRows): void
@@ -119,7 +147,6 @@ class GradeSheetImport implements ToArray, WithStartRow
         $codeRowIndex    = null;
         $subjectRowIndex = null;
 
-        // Find the header row whose first cell is "Matricule"
         foreach ($allRows as $i => $row) {
             $firstCell = strtolower(trim((string) ($row[0] ?? '')));
             if ($firstCell === 'matricule') {
@@ -150,7 +177,7 @@ class GradeSheetImport implements ToArray, WithStartRow
             return;
         }
 
-        // Locate first data row
+        // Find first data row after header
         $dataStartIndex = null;
         for ($i = $codeRowIndex + 1; $i < count($allRows); $i++) {
             $firstCell = trim((string) ($allRows[$i][0] ?? ''));
@@ -198,7 +225,7 @@ class GradeSheetImport implements ToArray, WithStartRow
             '',
         ];
 
-        // Propagate subject names rightward across merged blank cells.
+        // Propagate subject names rightward across merged blank cells
         $currentSubject = null;
         $subjectForCol  = [];
 
@@ -215,12 +242,12 @@ class GradeSheetImport implements ToArray, WithStartRow
             $subjectForCol[] = $currentSubject;
         }
 
-        $this->columnMap        = [];
-        $this->totalCol         = null;
-        $this->moy10Col         = null;
-        $this->moyClasseCol     = null;
-        $this->disciplineCol    = null;
-        $this->observationsCol  = null;
+        $this->columnMap       = [];
+        $this->totalCol        = null;
+        $this->moy10Col        = null;
+        $this->moyClasseCol    = null;
+        $this->disciplineCol   = null;
+        $this->observationsCol = null;
 
         $maxCol = max(count($codeRow), count($subjectRow));
         for ($col = 3; $col < $maxCol; $col++) {
@@ -230,9 +257,10 @@ class GradeSheetImport implements ToArray, WithStartRow
             $subjectFor    = $subjectForCol[$col] ?? null;
 
             // ── Manual summary column detection ────────────────────────────
-            // ORDER MATTERS: more specific patterns first.
+            // ORDER MATTERS: "Moyenne de la classe" MUST be checked before
+            // the generic "Moyenne" check, and "Total" last of the three.
 
-            // "Moyenne de la classe sur 10" or "… sur 20"
+            // 1) "Moyenne de la classe sur XX"
             if (str_contains($lowerLabel, 'moyenne de la classe')
                 || str_contains($lowerLabel, 'moyenne classe')
                 || str_contains($lowerLabel, 'moy. classe')
@@ -241,29 +269,32 @@ class GradeSheetImport implements ToArray, WithStartRow
                 continue;
             }
 
-            // "Moyenne sur 10" or "Moyenne sur 20"
-            if (preg_match('/moyenne\s+sur\s+\d+/i', $rawLabel)
-                || $lowerLabel === 'moyenne sur 10'
-                || $lowerLabel === 'moyenne sur 20'
-                || (str_contains($lowerLabel, 'moyenne') && !str_contains($lowerLabel, 'classe'))) {
+            // 2) "Moyenne sur XX" (without "classe")
+            if (preg_match('/^moyenne\s+sur\s+\d+/i', $rawLabel)
+                || preg_match('/^moy\.?\s+sur\s+\d+/i', $rawLabel)
+                || ($lowerLabel === 'moyenne sur 10')
+                || ($lowerLabel === 'moyenne sur 20')) {
                 $this->moy10Col = $col;
                 continue;
             }
 
-            // "Total sur 140" or "Total sur 200" or "Total sur …"
-            if (preg_match('/total\s+sur\s+\d+/i', $rawLabel)
+            // 3) "Total sur XX"
+            if (preg_match('/^total\s+sur\s+\d+/i', $rawLabel)
                 || str_contains($lowerLabel, 'total sur')
                 || $lowerLabel === 'total') {
                 $this->totalCol = $col;
                 continue;
             }
 
+            // 4) DISCIPLINE
             if (str_contains($lowerLabel, 'discipline')
                 || str_contains($subjectRowVal, 'dim. pers.')
                 || str_contains($subjectRowVal, 'dim pers')) {
                 $this->disciplineCol = $col;
                 continue;
             }
+
+            // 5) OBSERVATIONS / Commentaire
             if (str_contains($subjectRowVal, 'observation')
                 || str_contains($subjectRowVal, 'commentaire')
                 || str_contains($lowerLabel, 'observations')
@@ -294,12 +325,12 @@ class GradeSheetImport implements ToArray, WithStartRow
         }
 
         Log::info('GradeSheetImport: column map built', [
-            'columns'         => count($this->columnMap),
-            'total_col'       => $this->totalCol,
-            'moy10_col'       => $this->moy10Col,
-            'moy_classe_col'  => $this->moyClasseCol,
-            'discipline_col'  => $this->disciplineCol,
-            'observations_col'=> $this->observationsCol,
+            'columns'          => count($this->columnMap),
+            'total_col'        => $this->totalCol,
+            'moy10_col'        => $this->moy10Col,
+            'moy_classe_col'   => $this->moyClasseCol,
+            'discipline_col'   => $this->disciplineCol,
+            'observations_col' => $this->observationsCol,
         ]);
     }
 
@@ -326,6 +357,7 @@ class GradeSheetImport implements ToArray, WithStartRow
             $gradesProcessed = 0;
 
             // ── Competence grades ───────────────────────────────────────────
+            // No max_score bounds check — store exactly what was entered.
             foreach ($this->columnMap as $colIndex => $compositeKey) {
                 $rawValue = $row[$colIndex] ?? null;
                 $trimmed  = trim((string) $rawValue);
@@ -342,17 +374,38 @@ class GradeSheetImport implements ToArray, WithStartRow
                 $gradesProcessed++;
             }
 
-            // ── Manual summary fields → bulletin columns ────────────────────
+            // ── Manual summary fields ───────────────────────────────────────
+            // Only range-check total/moyenne/moyenne_classe to prevent decimal
+            // column overflow; grade scores are accepted as entered above.
+            $bounds  = $this->summaryBounds();
             $updates = [];
 
             if ($this->totalCol !== null) {
-                $updates['total_manuel'] = $this->parseNumeric($row[$this->totalCol] ?? null);
+                $val = $this->parseNumeric($row[$this->totalCol] ?? null);
+                if ($val !== null && $val > $bounds['total_max'] + 0.01) {
+                    throw new \InvalidArgumentException(
+                        "Total {$val} dépasse le maximum {$bounds['total_max']} pour ce niveau"
+                    );
+                }
+                $updates['total_manuel'] = $val;
             }
             if ($this->moy10Col !== null) {
-                $updates['moyenne_10'] = $this->parseNumeric($row[$this->moy10Col] ?? null);
+                $val = $this->parseNumeric($row[$this->moy10Col] ?? null);
+                if ($val !== null && $val > $bounds['moy_max'] + 0.01) {
+                    throw new \InvalidArgumentException(
+                        "Moyenne {$val} dépasse le maximum {$bounds['moy_max']} pour ce niveau"
+                    );
+                }
+                $updates['moyenne_10'] = $val;
             }
             if ($this->moyClasseCol !== null) {
-                $updates['moyenne_classe'] = $this->parseNumeric($row[$this->moyClasseCol] ?? null);
+                $val = $this->parseNumeric($row[$this->moyClasseCol] ?? null);
+                if ($val !== null && $val > $bounds['moy_cls_max'] + 0.01) {
+                    throw new \InvalidArgumentException(
+                        "Moyenne classe {$val} dépasse le maximum {$bounds['moy_cls_max']} pour ce niveau"
+                    );
+                }
+                $updates['moyenne_classe'] = $val;
             }
             if ($this->disciplineCol !== null) {
                 $val = trim((string) ($row[$this->disciplineCol] ?? ''));
@@ -400,7 +453,9 @@ class GradeSheetImport implements ToArray, WithStartRow
     {
         $value = strtoupper(trim((string) $raw));
         if (! in_array($value, ['A', 'EVA', 'NA'], true)) {
-            throw new \InvalidArgumentException("Statut invalide « {$value} » pour {$competence->code} (attendu : A, EVA ou NA)");
+            throw new \InvalidArgumentException(
+                "Statut invalide « {$value} » pour {$competence->code} (attendu : A, EVA ou NA)"
+            );
         }
 
         BulletinGrade::updateOrCreate(
@@ -409,23 +464,22 @@ class GradeSheetImport implements ToArray, WithStartRow
         );
     }
 
+    /**
+     * Saves a numeric score without any bounds check.
+     * The value is stored exactly as provided in the spreadsheet.
+     */
     private function saveNumericScore($bulletin, $competence, mixed $raw): void
     {
         $clean = str_replace([' ', ','], ['', '.'], trim((string) $raw));
         if (! is_numeric($clean)) {
-            throw new \InvalidArgumentException("Note non numérique « {$raw} » pour {$competence->code}");
-        }
-
-        $score    = (float) $clean;
-        $maxScore = (float) ($competence->max_score ?? $competence->subject->max_score ?? 20);
-
-        if ($score < 0 || $score > $maxScore) {
-            throw new \InvalidArgumentException("Note {$score} hors plage 0–{$maxScore} pour {$competence->code}");
+            throw new \InvalidArgumentException(
+                "Note non numérique « {$raw} » pour {$competence->code}"
+            );
         }
 
         BulletinGrade::updateOrCreate(
             ['bulletin_id' => $bulletin->id, 'competence_id' => $competence->id, 'period' => $this->period],
-            ['score' => $score, 'competence_status' => null]
+            ['score' => (float) $clean, 'competence_status' => null]
         );
     }
 
