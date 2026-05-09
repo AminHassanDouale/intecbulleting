@@ -129,7 +129,7 @@ new #[Layout('components.layouts.app')] class extends Component {
     {
         $code = strtoupper(trim((string) $this->selectedNiveau));
 
-        if (in_array($code, ['CP', 'CE1'], true)) {
+        if (in_array($code, ['CP'], true)) {
             return [
                 'total_max'         => 140,
                 'moyenne_max'       => 10,
@@ -138,7 +138,7 @@ new #[Layout('components.layouts.app')] class extends Component {
             ];
         }
 
-        if (in_array($code, ['CE2', 'CM1', 'CM2'], true)) {
+        if (in_array($code, ['CE2', 'CM1', 'CM2','CE1'], true)) {
             return [
                 'total_max'          => 200,
                 'moyenne_max'        => 20,
