@@ -34,10 +34,13 @@ use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
 class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWidths
 {
     private Collection $subjects;
+
     /** @var array<int, array{subject: Subject, start_col: int, end_col: int, competence_count: int}> */
     private array $subjectMap = [];
+
     /** 1-based index of the first summary column */
     private int $summaryStartCol = 4;
+
     /** Total of all numeric competence/subject max scores for this class */
     private int $totalMaxScore = 0;
 
@@ -45,11 +48,11 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
     private array $summaryLayout;
 
     public function __construct(
-        private int    $classroomId,
+        private int $classroomId,
         private string $period,
-        private int    $academicYearId,
+        private int $academicYearId,
         private string $niveauCode,
-        private ?int   $teacherId = null,
+        private ?int $teacherId = null,
     ) {
         $this->summaryLayout = $this->buildSummaryLayout($niveauCode);
         $this->loadSubjectsAndCompetences();
@@ -60,11 +63,14 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
     public static function resolveNiveauKey(string $niveauCode): ?string
     {
         $upper = preg_replace('/[^A-Z0-9]/', '', strtoupper(trim($niveauCode)));
-        foreach (['CM2', 'CM1', 'CE2', 'CE1', 'CP'] as $prefix) {
+
+        $prefixes = ['CM2', 'CM1', 'CE2', 'CE1', 'CP'];
+        foreach ($prefixes as $prefix) {
             if (str_starts_with($upper, $prefix)) {
                 return $prefix;
             }
         }
+
         return null;
     }
 
@@ -75,7 +81,7 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
      *   [Total sur X] [Moyenne sur Y] [Moyenne de la classe sur Y]
      *
      * CP  → X=140, Y=10
-     * CE*/CM* → X=200, Y=20
+     * CE* / CM* → X=200, Y=20
      */
     private function buildSummaryLayout(string $niveauCode): array
     {
@@ -84,21 +90,22 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
         if ($key === 'CP') {
             return [
                 'columns' => [
-                    ['key' => 'total_manuel',   'label' => 'Total sur 140',               'max' => 140],
-                    ['key' => 'moyenne_10',      'label' => 'Moyenne sur 10',              'max' => 10],
-                    ['key' => 'moyenne_classe',  'label' => 'Moyenne de la classe sur 10', 'max' => 10],
+                    ['key' => 'total_manuel',  'label' => 'Total sur 140',               'max' => 140],
+                    ['key' => 'moyenne_10',    'label' => 'Moyenne sur 10',              'max' => 10],
+                    ['key' => 'moyenne_classe','label' => 'Moyenne de la classe sur 10', 'max' => 10],
                 ],
                 'group_label' => 'TOTAUX / MOYENNES',
                 'matched_key' => 'CP',
             ];
         }
 
-        if (in_array($key, ['CE1', 'CE2', 'CM1', 'CM2'], true)) {
+        $ceAndCmKeys = ['CE1', 'CE2', 'CM1', 'CM2'];
+        if ($key !== null && in_array($key, $ceAndCmKeys, true)) {
             return [
                 'columns' => [
-                    ['key' => 'total_manuel',   'label' => 'Total sur 200',               'max' => 200],
-                    ['key' => 'moyenne_10',      'label' => 'Moyenne sur 20',              'max' => 20],
-                    ['key' => 'moyenne_classe',  'label' => 'Moyenne de la classe sur 20', 'max' => 20],
+                    ['key' => 'total_manuel',  'label' => 'Total sur 200',               'max' => 200],
+                    ['key' => 'moyenne_10',    'label' => 'Moyenne sur 20',              'max' => 20],
+                    ['key' => 'moyenne_classe','label' => 'Moyenne de la classe sur 20', 'max' => 20],
                 ],
                 'group_label' => 'TOTAUX / MOYENNES',
                 'matched_key' => $key,
@@ -108,9 +115,9 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
         // Fallback — unknown niveau
         return [
             'columns' => [
-                ['key' => 'total_manuel',   'label' => 'Total sur ?',                  'max' => 0],
-                ['key' => 'moyenne_10',      'label' => 'Moyenne sur 10',              'max' => 10],
-                ['key' => 'moyenne_classe',  'label' => 'Moyenne de la classe sur 10', 'max' => 10],
+                ['key' => 'total_manuel',  'label' => 'Total sur ?',                  'max' => 0],
+                ['key' => 'moyenne_10',    'label' => 'Moyenne sur 10',              'max' => 10],
+                ['key' => 'moyenne_classe','label' => 'Moyenne de la classe sur 10', 'max' => 10],
             ],
             'group_label' => 'TOTAUX / MOYENNES',
             'matched_key' => null,
@@ -125,24 +132,33 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
         $sectionCode = (string) $classroom->code;
         $levelCode   = preg_replace('/[AB]$/', '', $sectionCode) ?: $sectionCode;
 
-        $query = Subject::whereHas('niveau', fn($q) => $q->where('code', $this->niveauCode))
-            ->where(function ($q) use ($sectionCode, $levelCode) {
-                $q->where('section_code', $sectionCode)
-                  ->orWhere(function ($q2) use ($levelCode) {
-                      $q2->whereNull('section_code')->where('classroom_code', $levelCode);
-                  })
-                  ->orWhere(function ($q3) {
-                      $q3->whereNull('section_code')->whereNull('classroom_code');
-                  });
-            })
-            ->with(['competences' => function ($q) use ($sectionCode) {
-                $q->where(fn($q2) => $q2->whereNull('section_code')->orWhere('section_code', $sectionCode))
-                  ->orderBy('order');
-            }])
-            ->orderBy('order');
+        $query = Subject::whereHas('niveau', function ($q) {
+            $q->where('code', $this->niveauCode);
+        })
+        ->where(function ($q) use ($sectionCode, $levelCode) {
+            $q->where('section_code', $sectionCode)
+              ->orWhere(function ($q2) use ($levelCode) {
+                  $q2->whereNull('section_code')
+                     ->where('classroom_code', $levelCode);
+              })
+              ->orWhere(function ($q3) {
+                  $q3->whereNull('section_code')
+                     ->whereNull('classroom_code');
+              });
+        })
+        ->with(['competences' => function ($q) use ($sectionCode) {
+            $q->where(function ($q2) use ($sectionCode) {
+                $q2->whereNull('section_code')
+                   ->orWhere('section_code', $sectionCode);
+            })->orderBy('order');
+        }])
+        ->orderBy('order');
 
-        if ($this->teacherId) {
-            $query->whereHas('teachers', fn($q) => $q->where('users.id', $this->teacherId));
+        if ($this->teacherId !== null) {
+            $teacherId = $this->teacherId;
+            $query->whereHas('teachers', function ($q) use ($teacherId) {
+                $q->where('users.id', $teacherId);
+            });
         }
 
         $this->subjects = $query->get();
@@ -150,7 +166,9 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
         $colIndex = 4;
         foreach ($this->subjects as $subject) {
             $count = $subject->competences->count();
-            if ($count === 0) continue;
+            if ($count === 0) {
+                continue;
+            }
 
             $this->subjectMap[] = [
                 'subject'          => $subject,
@@ -162,8 +180,8 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
             if ($subject->scale_type !== 'competence') {
                 $hasIndividualMax = $subject->competences->whereNotNull('max_score')->isNotEmpty();
                 if ($hasIndividualMax) {
-                    foreach ($subject->competences as $c) {
-                        $this->totalMaxScore += (int) ($c->max_score ?? 0);
+                    foreach ($subject->competences as $competence) {
+                        $this->totalMaxScore += (int) ($competence->max_score ?? 0);
                     }
                 } else {
                     $this->totalMaxScore += (int) ($subject->max_score ?? 0);
@@ -215,8 +233,15 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
         return count($this->summaryLayout['columns']); // always 3
     }
 
-    private function disciplineCol(): string { return $this->summaryCol($this->summaryCount()); }
-    private function obsCol(): string        { return $this->summaryCol($this->summaryCount() + 1); }
+    private function disciplineCol(): string
+    {
+        return $this->summaryCol($this->summaryCount());
+    }
+
+    private function obsCol(): string
+    {
+        return $this->summaryCol($this->summaryCount() + 1);
+    }
 
     // ── Array rows ───────────────────────────────────────────────────────────
 
@@ -232,7 +257,9 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
 
         // ── Row 1: Title ──────────────────────────────────────────────────────
         $titleRow    = array_fill(0, $totalColCount, '');
-        $section     = $classroom?->section ? ' (' . strtoupper($classroom->section) . ')' : '';
+        $section     = ($classroom !== null && $classroom->section)
+            ? ' (' . strtoupper($classroom->section) . ')'
+            : '';
         $titleRow[0] = 'CARNET INTEC PRIMAIRE - CLASSE '
             . strtoupper((string) ($classroom?->label ?? ''))
             . $section
@@ -268,7 +295,9 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
                     $label = $competence->code . ' / ' . $competence->name;
                 } elseif (! empty($competence->description)) {
                     $shortDesc = mb_substr($competence->description, 0, 30);
-                    if (mb_strlen($competence->description) > 30) $shortDesc .= '…';
+                    if (mb_strlen($competence->description) > 30) {
+                        $shortDesc .= '…';
+                    }
                     $label = $competence->code . ' / ' . $shortDesc;
                 }
 
@@ -322,7 +351,7 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
                         ->where('period', $this->period)
                         ->first();
 
-                    if ($grade) {
+                    if ($grade !== null) {
                         if ($grade->competence_status) {
                             $cell = $grade->competence_status->value;
                         } elseif ($grade->score !== null) {
@@ -336,7 +365,7 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
             // Summary columns in the defined order
             foreach ($this->summaryLayout['columns'] as $col) {
                 $value = $bulletin?->{$col['key']};
-                $row[] = $value !== null && $value !== '' ? (string) $value : '';
+                $row[] = ($value !== null && $value !== '') ? (string) $value : '';
             }
 
             $row[] = (string) ($bulletin?->discipline_status ?? '');
@@ -455,7 +484,7 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
             }
 
             $palette = ['ede9fe', 'ddd6fe', 'ede9fe', 'ddd6fe', 'ede9fe'];
-            foreach ($this->summaryLayout['columns'] as $i => $_col) {
+            foreach ($this->summaryLayout['columns'] as $i => $summaryCol) {
                 $c = $this->summaryCol($i);
                 $sheet->getStyle("{$c}{$dataStart}:{$c}{$lastRow}")->applyFromArray([
                     'fill'      => ['fillType' => Fill::FILL_SOLID, 'color' => ['rgb' => $palette[$i % count($palette)]]],
@@ -488,7 +517,7 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
                     ]);
                 }
                 $altPalette = ['e9d5ff', 'd8b4fe', 'e9d5ff', 'd8b4fe', 'e9d5ff'];
-                foreach ($this->summaryLayout['columns'] as $i => $_col) {
+                foreach ($this->summaryLayout['columns'] as $i => $summaryCol) {
                     $c = $this->summaryCol($i);
                     $sheet->getStyle("{$c}{$r}")->applyFromArray([
                         'fill' => ['fillType' => Fill::FILL_SOLID, 'color' => ['rgb' => $altPalette[$i % count($altPalette)]]],
@@ -557,7 +586,7 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
 
     public function title(): string
     {
-        if ($this->teacherId) {
+        if ($this->teacherId !== null) {
             $name  = \App\Models\User::find($this->teacherId)?->name ?? 'Ens.';
             $short = mb_substr(trim(explode(' ', $name)[0]), 0, 14);
             return substr("{$short} - {$this->period}", 0, 31);
@@ -572,17 +601,25 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
         $classroom   = Classroom::find($this->classroomId);
         $periodLabel = PeriodEnum::from($this->period)->label();
         $label       = preg_replace('/[^A-Za-z0-9_\-]/', '_', (string) ($classroom?->label ?? 'classe'));
-        $suffix      = $this->teacherId ? '_prof-' . $this->teacherId : '';
+        $suffix      = $this->teacherId !== null ? '_prof-' . $this->teacherId : '';
 
         return "notes_{$label}_{$periodLabel}{$suffix}_" . now()->format('Y-m-d_H-i-s') . '.xlsx';
     }
 
     private function periodLongLabel(PeriodEnum $period): string
     {
-        if ($period->value === 'T1') return 'PÉRIODE 1 (Trimestre 1)';
-        if ($period->value === 'T2') return 'PÉRIODE 2 (Trimestre 2)';
-        if ($period->value === 'T3') return 'PÉRIODE 3 (Trimestre 3)';
-        if ($period->value === 'ANNUEL') return 'ANNUEL';
+        if ($period->value === 'T1') {
+            return 'PÉRIODE 1 (Trimestre 1)';
+        }
+        if ($period->value === 'T2') {
+            return 'PÉRIODE 2 (Trimestre 2)';
+        }
+        if ($period->value === 'T3') {
+            return 'PÉRIODE 3 (Trimestre 3)';
+        }
+        if ($period->value === 'ANNUEL') {
+            return 'ANNUEL';
+        }
         return strtoupper($period->label());
     }
 }
