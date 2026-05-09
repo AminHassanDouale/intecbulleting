@@ -617,16 +617,40 @@ new #[Layout('components.layouts.app')] class extends Component {
                 ->count();
         }
 
+        // ── Niveau-aware summary scale (computed inline so it always reaches the view) ──
+        $niveauUpper = strtoupper(trim((string) $this->selectedNiveau));
+        if ($niveauUpper === 'CP') {
+            $summaryScale = [
+                'total_max'          => 140,
+                'moyenne_max'        => 10,
+                'moyenne_classe_max' => 10,
+                'group_label'        => 'TOTAUX / MOYENNES',
+            ];
+        } elseif (in_array($niveauUpper, ['CE1', 'CE2', 'CM1', 'CM2'], true)) {
+            $summaryScale = [
+                'total_max'          => 200,
+                'moyenne_max'        => 20,
+                'moyenne_classe_max' => 20,
+                'group_label'        => 'TOTAUX / MOYENNES',
+            ];
+        } else {
+            $summaryScale = [
+                'total_max'          => 0,
+                'moyenne_max'        => 10,
+                'moyenne_classe_max' => 10,
+                'group_label'        => 'TOTAUX / MOYENNES',
+            ];
+        }
+
         return compact(
             'niveaux', 'classrooms', 'years', 'students', 'subjects',
             'bulletin', 'canEdit', 'teacherSubmitted',
             'periodLocked', 'lockReason', 'progress', 'totalMaxSum',
-            'resetCount'
+            'resetCount', 'summaryScale'
         ) + [
             'periodOptions'     => PeriodEnum::options(),
             'competenceOptions' => CompetenceStatusEnum::options(),
             'isDirection'       => $isDirection,
-            'summaryScale'      => $this->summaryScale,
         ];
     }
 }; ?>
@@ -808,7 +832,12 @@ new #[Layout('components.layouts.app')] class extends Component {
                     {{-- ── TOTAUX / MOYENNES + DIM. PERS. + OBSERVATIONS panel (level-aware) ── --}}
                     @php
                         $isCp      = strtoupper((string)$selectedNiveau) === 'CP';
-                        $totalMax  = $summaryScale['total_max'] ?: $totalMaxSum;
+                        // Hard binding to the niveau scale — never fall back to the
+                        // competence-sum (which can be 220 for some CE1/CE2 classes).
+                        $totalMax  = (int) ($summaryScale['total_max'] ?? 0);
+                        if ($totalMax === 0) {
+                            $totalMax = $totalMaxSum; // truly unknown niveau → use sum
+                        }
                         $moyMax    = $summaryScale['moyenne_max'];
                         $moyClsMax = $summaryScale['moyenne_classe_max'];
                     @endphp
