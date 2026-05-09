@@ -579,12 +579,10 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
 
     private function periodLongLabel(PeriodEnum $period): string
     {
-        return match($period->value) {
-            'T1'     => 'PÉRIODE 1 (Trimestre 1)',
-            'T2'     => 'PÉRIODE 2 (Trimestre 2)',
-            'T3'     => 'PÉRIODE 3 (Trimestre 3)',
-            'ANNUEL' => 'ANNUEL',
-            default  => strtoupper($period->label()),
-        };
+        if ($period->value === 'T1') return 'PÉRIODE 1 (Trimestre 1)';
+        if ($period->value === 'T2') return 'PÉRIODE 2 (Trimestre 2)';
+        if ($period->value === 'T3') return 'PÉRIODE 3 (Trimestre 3)';
+        if ($period->value === 'ANNUEL') return 'ANNUEL';
+        return strtoupper($period->label());
     }
 }
