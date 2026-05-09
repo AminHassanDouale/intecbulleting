@@ -124,37 +124,57 @@ new #[Layout('components.layouts.app')] class extends Component {
      * ── Niveau-aware summary scale (drives form labels & validation) ──
      * CP        → /140 + /10   (trois colonnes : Total/140, Moy/10, Moy classe/10)
      * CE1/CE2/CM* → /200 + /20 (trois colonnes : Moy classe/20, Moy/20, Total/200)
+     *
+     * Uses prefix matching so codes like "CE1A", "CM2 ", "CE1_B" still resolve.
      */
     public function getSummaryScaleProperty(): array
     {
-        $code = strtoupper(trim((string) $this->selectedNiveau));
+        return $this->resolveSummaryScale($this->selectedNiveau);
+    }
 
-        // CP only → /140 + /10
-        if ($code === 'CP') {
+    /**
+     * Centralised niveau → scale resolver. Used by both the magic property
+     * AND the inline computation in with(), to guarantee consistency.
+     */
+    public static function resolveSummaryScale(?string $niveauCode): array
+    {
+        $upper = preg_replace('/[^A-Z0-9]/', '', strtoupper(trim((string) $niveauCode)));
+
+        // Order: longer/more specific first
+        $key = null;
+        foreach (['CM2', 'CM1', 'CE2', 'CE1', 'CP'] as $prefix) {
+            if (str_starts_with($upper, $prefix)) {
+                $key = $prefix;
+                break;
+            }
+        }
+
+        if ($key === 'CP') {
             return [
-                'total_max'         => 140,
-                'moyenne_max'       => 10,
-                'moyenne_classe_max'=> 10,
-                'group_label'       => 'TOTAUX / MOYENNES',
+                'total_max'          => 140,
+                'moyenne_max'        => 10,
+                'moyenne_classe_max' => 10,
+                'group_label'        => 'TOTAUX / MOYENNES',
+                'matched_key'        => 'CP',
             ];
         }
 
-        // CE1, CE2, CM1, CM2 → /200 + /20
-        if (in_array($code, ['CE1', 'CE2', 'CM1', 'CM2'], true)) {
+        if (in_array($key, ['CE1', 'CE2', 'CM1', 'CM2'], true)) {
             return [
                 'total_max'          => 200,
                 'moyenne_max'        => 20,
                 'moyenne_classe_max' => 20,
                 'group_label'        => 'TOTAUX / MOYENNES',
+                'matched_key'        => $key,
             ];
         }
 
-        // Fallback: use computed competence total
         return [
-            'total_max'          => 0,   // unknown → "?"
+            'total_max'          => 0,
             'moyenne_max'        => 10,
             'moyenne_classe_max' => 10,
             'group_label'        => 'TOTAUX / MOYENNES',
+            'matched_key'        => null,
         ];
     }
 
@@ -618,29 +638,13 @@ new #[Layout('components.layouts.app')] class extends Component {
         }
 
         // ── Niveau-aware summary scale (computed inline so it always reaches the view) ──
-        $niveauUpper = strtoupper(trim((string) $this->selectedNiveau));
-        if ($niveauUpper === 'CP') {
-            $summaryScale = [
-                'total_max'          => 140,
-                'moyenne_max'        => 10,
-                'moyenne_classe_max' => 10,
-                'group_label'        => 'TOTAUX / MOYENNES',
-            ];
-        } elseif (in_array($niveauUpper, ['CE1', 'CE2', 'CM1', 'CM2'], true)) {
-            $summaryScale = [
-                'total_max'          => 200,
-                'moyenne_max'        => 20,
-                'moyenne_classe_max' => 20,
-                'group_label'        => 'TOTAUX / MOYENNES',
-            ];
-        } else {
-            $summaryScale = [
-                'total_max'          => 0,
-                'moyenne_max'        => 10,
-                'moyenne_classe_max' => 10,
-                'group_label'        => 'TOTAUX / MOYENNES',
-            ];
-        }
+        $summaryScale = self::resolveSummaryScale($this->selectedNiveau);
+
+        \Log::debug('Saisie summary scale', [
+            'selectedNiveau' => $this->selectedNiveau,
+            'matched_key'    => $summaryScale['matched_key'] ?? null,
+            'total_max'      => $summaryScale['total_max'],
+        ]);
 
         return compact(
             'niveaux', 'classrooms', 'years', 'students', 'subjects',
@@ -831,11 +835,13 @@ new #[Layout('components.layouts.app')] class extends Component {
 
                     {{-- ── TOTAUX / MOYENNES + DIM. PERS. + OBSERVATIONS panel (level-aware) ── --}}
                     @php
-                        $isCp      = strtoupper((string)$selectedNiveau) === 'CP';
+                        $matchedKey = $summaryScale['matched_key'] ?? null;
+                        $isCp       = $matchedKey === 'CP';
                         // Hard binding to the niveau scale — never fall back to the
                         // competence-sum (which can be 220 for some CE1/CE2 classes).
+                        // Only fall back when the niveau truly couldn't be resolved.
                         $totalMax  = (int) ($summaryScale['total_max'] ?? 0);
-                        if ($totalMax === 0) {
+                        if ($totalMax === 0 && $matchedKey === null) {
                             $totalMax = $totalMaxSum; // truly unknown niveau → use sum
                         }
                         $moyMax    = $summaryScale['moyenne_max'];
@@ -843,10 +849,14 @@ new #[Layout('components.layouts.app')] class extends Component {
                     @endphp
 
                     <div class="rounded-xl border-2 border-indigo-200 bg-gradient-to-br from-indigo-50/60 to-purple-50/60 p-4 space-y-3">
-                        <div class="flex items-center gap-2">
+                        <div class="flex items-center gap-2 flex-wrap">
                             <span class="text-xl">📊</span>
                             <h3 class="font-bold text-sm text-indigo-900">{{ $summaryScale['group_label'] }} &nbsp;·&nbsp; DIM. PERS. &nbsp;·&nbsp; OBSERVATIONS</h3>
                             <span class="badge badge-ghost badge-xs">Niveau {{ $selectedNiveau }}</span>
+                            {{-- Debug badge: shows what the resolver matched. Remove once confirmed. --}}
+                            <span class="badge {{ $matchedKey ? 'badge-info' : 'badge-warning' }} badge-xs">
+                                {{ $matchedKey ? "→ {$matchedKey} (Total/{$totalMax})" : "✗ niveau non reconnu (sum={$totalMaxSum})" }}
+                            </span>
                         </div>
 
                         @if($isCp)
