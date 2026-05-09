@@ -15,19 +15,16 @@ use Maatwebsite\Excel\Concerns\ToArray;
 use Maatwebsite\Excel\Concerns\WithStartRow;
 
 /**
- * GradeSheetImport — section-aware, ignores manual summary columns.
+ * GradeSheetImport — section-aware, level-aware manual summary detection.
  *
- * Subjects loaded match the SAME logic as GradeSheetExport:
- *   1) section_code = classroom.code, OR
- *   2) classroom_code = level (CPA → CP) when section_code is NULL, OR
- *   3) global subjects (no section, no level) within the niveau.
+ * Detects the following manual summary columns regardless of order:
+ *   - "Total sur 140" / "Total sur 200" / "Total sur …" → bulletin->total_manuel
+ *   - "Moyenne sur 10" / "Moyenne sur 20"               → bulletin->moyenne_10
+ *   - "Moyenne de la classe sur 10" / "… sur 20"        → bulletin->moyenne_classe
+ *   - "DISCIPLINE"                                       → bulletin->discipline_status
+ *   - "OBSERVATIONS" / "Commentaire"                     → bulletin->teacher_comment
  *
- * Manual columns detected by header text and routed (NOT treated as competences):
- *   - "Total sur …"            → bulletin->total_manuel
- *   - "Moyenne sur 10"          → bulletin->moyenne_10
- *   - "Moyenne de la classe …"  → bulletin->moyenne_classe
- *   - "DISCIPLINE"              → bulletin->discipline_status
- *   - "OBSERVATIONS"            → bulletin->teacher_comment
+ * Subjects loaded match GradeSheetExport's logic.
  */
 class GradeSheetImport implements ToArray, WithStartRow
 {
@@ -62,7 +59,7 @@ class GradeSheetImport implements ToArray, WithStartRow
 
     public function startRow(): int { return 1; }
 
-    // ── Subject loading (section-aware, mirrors export) ──────────────────────
+    // ── Subject loading (mirrors export) ─────────────────────────────────────
 
     private function loadSubjectsAndCompetences(): void
     {
@@ -139,12 +136,17 @@ class GradeSheetImport implements ToArray, WithStartRow
 
         $this->buildColumnMap($allRows[$subjectRowIndex] ?? [], $allRows[$codeRowIndex] ?? []);
 
-        if (empty($this->columnMap)) {
+        if (empty($this->columnMap)
+            && $this->totalCol === null
+            && $this->moy10Col === null
+            && $this->moyClasseCol === null
+            && $this->disciplineCol === null
+            && $this->observationsCol === null) {
             $known = implode(', ', array_unique(array_map(
                 fn($k) => explode('::', $k)[0],
                 array_keys($this->competenceMap)
             )));
-            $this->errors[] = 'Aucune colonne de notes reconnue. ' . ($known ? "Matières attendues : {$known}." : '');
+            $this->errors[] = 'Aucune colonne reconnue. ' . ($known ? "Matières attendues : {$known}." : '');
             return;
         }
 
@@ -187,7 +189,6 @@ class GradeSheetImport implements ToArray, WithStartRow
 
     private function buildColumnMap(array $subjectRow, array $codeRow): void
     {
-        // Labels in the SUBJECT row (row 3) that are NOT subject names
         $nonSubjectLabels = [
             'matricule', 'nom complet', 'nom', 'prénom', 'prenom',
             'date naissance', 'date de naissance',
@@ -198,7 +199,6 @@ class GradeSheetImport implements ToArray, WithStartRow
         ];
 
         // Propagate subject names rightward across merged blank cells.
-        // Reset to null when a non-subject label is encountered.
         $currentSubject = null;
         $subjectForCol  = [];
 
@@ -207,7 +207,6 @@ class GradeSheetImport implements ToArray, WithStartRow
             $lower   = strtolower($trimmed);
 
             if ($trimmed !== '' && !in_array($lower, $nonSubjectLabels, true)) {
-                // Strip trailing "/20" max-score hint from subject header
                 $cleaned        = preg_replace('#\s*/\s*\d+\s*$#u', '', $trimmed);
                 $currentSubject = trim($cleaned);
             } elseif ($trimmed !== '' && in_array($lower, $nonSubjectLabels, true)) {
@@ -216,7 +215,6 @@ class GradeSheetImport implements ToArray, WithStartRow
             $subjectForCol[] = $currentSubject;
         }
 
-        // Reset all routed-column trackers
         $this->columnMap        = [];
         $this->totalCol         = null;
         $this->moy10Col         = null;
@@ -224,7 +222,6 @@ class GradeSheetImport implements ToArray, WithStartRow
         $this->disciplineCol    = null;
         $this->observationsCol  = null;
 
-        // Iterate over the columns, skipping identity (0, 1, 2)
         $maxCol = max(count($codeRow), count($subjectRow));
         for ($col = 3; $col < $maxCol; $col++) {
             $rawLabel      = trim((string) ($codeRow[$col] ?? ''));
@@ -233,7 +230,9 @@ class GradeSheetImport implements ToArray, WithStartRow
             $subjectFor    = $subjectForCol[$col] ?? null;
 
             // ── Manual summary column detection ────────────────────────────
-            // Order matters: more specific patterns first.
+            // ORDER MATTERS: more specific patterns first.
+
+            // "Moyenne de la classe sur 10" or "… sur 20"
             if (str_contains($lowerLabel, 'moyenne de la classe')
                 || str_contains($lowerLabel, 'moyenne classe')
                 || str_contains($lowerLabel, 'moy. classe')
@@ -241,17 +240,24 @@ class GradeSheetImport implements ToArray, WithStartRow
                 $this->moyClasseCol = $col;
                 continue;
             }
-            if (str_contains($lowerLabel, 'moyenne sur 10')
-                || str_contains($lowerLabel, 'moyenne sur')
+
+            // "Moyenne sur 10" or "Moyenne sur 20"
+            if (preg_match('/moyenne\s+sur\s+\d+/i', $rawLabel)
+                || $lowerLabel === 'moyenne sur 10'
+                || $lowerLabel === 'moyenne sur 20'
                 || (str_contains($lowerLabel, 'moyenne') && !str_contains($lowerLabel, 'classe'))) {
                 $this->moy10Col = $col;
                 continue;
             }
-            if (str_contains($lowerLabel, 'total sur')
+
+            // "Total sur 140" or "Total sur 200" or "Total sur …"
+            if (preg_match('/total\s+sur\s+\d+/i', $rawLabel)
+                || str_contains($lowerLabel, 'total sur')
                 || $lowerLabel === 'total') {
                 $this->totalCol = $col;
                 continue;
             }
+
             if (str_contains($lowerLabel, 'discipline')
                 || str_contains($subjectRowVal, 'dim. pers.')
                 || str_contains($subjectRowVal, 'dim pers')) {
@@ -269,7 +275,6 @@ class GradeSheetImport implements ToArray, WithStartRow
             // ── Competence mapping ─────────────────────────────────────────
             if ($rawLabel === '' || $subjectFor === null) continue;
 
-            // Extract competence code: "CB1 / Lecture /20" → "CB1"
             $code = $rawLabel;
             if (str_contains($rawLabel, '/')) {
                 $code = trim(explode('/', $rawLabel)[0]);
@@ -341,16 +346,13 @@ class GradeSheetImport implements ToArray, WithStartRow
             $updates = [];
 
             if ($this->totalCol !== null) {
-                $val = $this->parseNumeric($row[$this->totalCol] ?? null);
-                $updates['total_manuel'] = $val;
+                $updates['total_manuel'] = $this->parseNumeric($row[$this->totalCol] ?? null);
             }
             if ($this->moy10Col !== null) {
-                $val = $this->parseNumeric($row[$this->moy10Col] ?? null);
-                $updates['moyenne_10'] = $val;
+                $updates['moyenne_10'] = $this->parseNumeric($row[$this->moy10Col] ?? null);
             }
             if ($this->moyClasseCol !== null) {
-                $val = $this->parseNumeric($row[$this->moyClasseCol] ?? null);
-                $updates['moyenne_classe'] = $val;
+                $updates['moyenne_classe'] = $this->parseNumeric($row[$this->moyClasseCol] ?? null);
             }
             if ($this->disciplineCol !== null) {
                 $val = trim((string) ($row[$this->disciplineCol] ?? ''));
@@ -393,8 +395,6 @@ class GradeSheetImport implements ToArray, WithStartRow
         if ($clean === '') return null;
         return is_numeric($clean) ? (float) $clean : null;
     }
-
-    // ── Grade persistence ────────────────────────────────────────────────────
 
     private function saveCompetenceStatus($bulletin, $competence, mixed $raw): void
     {

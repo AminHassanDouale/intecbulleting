@@ -120,6 +120,42 @@ new #[Layout('components.layouts.app')] class extends Component {
         return ! $previous || ! in_array($previous->status->value, ['approved', 'published']);
     }
 
+    /**
+     * ── Niveau-aware summary scale (drives form labels & validation) ──
+     * CP/CE1  → /140 + /10   (trois colonnes : Total/140, Moy/10, Moy classe/10)
+     * CE2/CM* → /200 + /20   (trois colonnes : Moy classe/20, Moy/20, Total/200)
+     */
+    public function getSummaryScaleProperty(): array
+    {
+        $code = strtoupper(trim((string) $this->selectedNiveau));
+
+        if (in_array($code, ['CP', 'CE1'], true)) {
+            return [
+                'total_max'         => 140,
+                'moyenne_max'       => 10,
+                'moyenne_classe_max'=> 10,
+                'group_label'       => 'TOTAUX / MOYENNES',
+            ];
+        }
+
+        if (in_array($code, ['CE2', 'CM1', 'CM2'], true)) {
+            return [
+                'total_max'          => 200,
+                'moyenne_max'        => 20,
+                'moyenne_classe_max' => 20,
+                'group_label'        => 'TOTAUX / MOYENNES',
+            ];
+        }
+
+        // Fallback: use computed competence total
+        return [
+            'total_max'          => 0,   // unknown → "?"
+            'moyenne_max'        => 10,
+            'moyenne_classe_max' => 10,
+            'group_label'        => 'TOTAUX / MOYENNES',
+        ];
+    }
+
     public function saveGrades(): void
     {
         if (! $this->bulletinId) return;
@@ -134,7 +170,6 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         app(SaveGradeAction::class)->execute($bulletin, $this->grades);
 
-        // Always overwrite — empty string becomes null so the user can clear values
         $bulletin->update([
             'teacher_comment'   => $this->teacherComment   !== '' ? $this->teacherComment   : null,
             'discipline_status' => $this->disciplineStatus !== '' ? $this->disciplineStatus : null,
@@ -221,6 +256,93 @@ new #[Layout('components.layouts.app')] class extends Component {
         $submitted > 0
             ? $this->success("{$submitted} bulletin(s) soumis !", icon: 'o-paper-airplane', position: 'toast-top toast-end')
             : $this->warning('Aucun bulletin à soumettre.', 'Tous déjà soumis ou verrouillés.', icon: 'o-information-circle', position: 'toast-top toast-end');
+    }
+
+    /**
+     * Reset (réinitialiser) the entire trimester for the selected classroom:
+     *   - only bulletins still in `draft` (Brouillon) status are touched
+     *   - all grades for that bulletin/period are deleted
+     *   - manual fields (total/moyenne/discipline/observations) are cleared
+     *   - bulletin row is kept (status remains `draft`)
+     *
+     * Bulletins in any other status (submitted, approved, published, …) are left intact.
+     */
+    public function resetTrimester(): void
+    {
+        if (! $this->selectedClassroom || ! $this->selectedPeriod || ! $this->selectedYear) {
+            $this->error('Sélection incomplète.', icon: 'o-exclamation-circle', position: 'toast-top toast-end');
+            return;
+        }
+
+        $bulletins = Bulletin::where('classroom_id', $this->selectedClassroom)
+            ->where('academic_year_id', $this->selectedYear)
+            ->where('period', $this->selectedPeriod)
+            ->where('status', BulletinStatusEnum::DRAFT)
+            ->get();
+
+        if ($bulletins->isEmpty()) {
+            $this->warning('Rien à réinitialiser.',
+                'Aucun bulletin en statut « Brouillon » pour ce trimestre.',
+                icon: 'o-information-circle', position: 'toast-top toast-end');
+            return;
+        }
+
+        $userId         = auth()->id();
+        $isDirection    = auth()->user()->hasAnyRole(['admin', 'direction']);
+        $bulletinsCount = 0;
+        $gradesDeleted  = 0;
+
+        \DB::transaction(function () use ($bulletins, $userId, $isDirection, &$bulletinsCount, &$gradesDeleted) {
+            foreach ($bulletins as $bulletin) {
+                // Permission gate: teachers can only reset bulletins they could edit.
+                if (! $isDirection && ! $bulletin->canTeacherEdit($userId)) continue;
+
+                $count          = $bulletin->grades()->count();
+                $gradesDeleted += $count;
+                $bulletin->grades()->delete();
+
+                // Clear teacher submissions so the workflow restarts cleanly.
+                if (method_exists($bulletin, 'teacherSubmissions')) {
+                    $bulletin->teacherSubmissions()->delete();
+                }
+
+                // Clear manual summary + meta fields, keep bulletin in draft.
+                $bulletin->update([
+                    'teacher_comment'       => null,
+                    'discipline_status'     => null,
+                    'total_manuel'          => null,
+                    'moyenne_10'            => null,
+                    'moyenne_classe'        => null,
+                    'submitted_by'          => null,
+                    'submitted_at'          => null,
+                    'pedagogie_approved_by' => null,
+                    'pedagogie_approved_at' => null,
+                    'finance_approved_by'   => null,
+                    'finance_approved_at'   => null,
+                    'direction_approved_by' => null,
+                    'direction_approved_at' => null,
+                    'status'                => BulletinStatusEnum::DRAFT,
+                ]);
+
+                $bulletinsCount++;
+            }
+        });
+
+        $this->resetForm();
+
+        if ($bulletinsCount === 0) {
+            $this->warning('Aucune réinitialisation effectuée.',
+                'Vous n\'avez pas les droits ou les bulletins ne sont plus en brouillon.',
+                icon: 'o-shield-exclamation', position: 'toast-top toast-end');
+            return;
+        }
+
+        $this->success(
+            "{$bulletinsCount} bulletin(s) réinitialisé(s).",
+            "{$gradesDeleted} note(s) supprimée(s).",
+            icon: 'o-arrow-path',
+            position: 'toast-top toast-end'
+        );
     }
 
     protected function shouldFilterByTeacher(): bool
@@ -412,7 +534,6 @@ new #[Layout('components.layouts.app')] class extends Component {
 
             $subjects = $q->orderBy('order')->get();
 
-            // Compute total max for the selected class
             foreach ($subjects as $subject) {
                 if ($subject->scale_type === 'competence') continue;
                 $hasIndividualMax = $subject->competences->whereNotNull('max_score')->isNotEmpty();
@@ -483,14 +604,27 @@ new #[Layout('components.layouts.app')] class extends Component {
             }
         }
 
+        // ── Reset-trimester button visibility ──
+        // Show iff at least one bulletin in this classroom/period is still DRAFT
+        $resetCount = 0;
+        if ($this->selectedClassroom && $this->selectedPeriod && $this->selectedYear) {
+            $resetCount = Bulletin::where('classroom_id', $this->selectedClassroom)
+                ->where('academic_year_id', $this->selectedYear)
+                ->where('period', $this->selectedPeriod)
+                ->where('status', BulletinStatusEnum::DRAFT)
+                ->count();
+        }
+
         return compact(
             'niveaux', 'classrooms', 'years', 'students', 'subjects',
             'bulletin', 'canEdit', 'teacherSubmitted',
-            'periodLocked', 'lockReason', 'progress', 'totalMaxSum'
+            'periodLocked', 'lockReason', 'progress', 'totalMaxSum',
+            'resetCount'
         ) + [
             'periodOptions'     => PeriodEnum::options(),
             'competenceOptions' => CompetenceStatusEnum::options(),
             'isDirection'       => $isDirection,
+            'summaryScale'      => $this->summaryScale,
         ];
     }
 }; ?>
@@ -576,7 +710,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         @endforeach
     </div>
 
-    {{-- Export / Import toolbar --}}
+    {{-- Export / Import / Reset toolbar --}}
     <div class="card bg-base-100 shadow">
         <div class="card-body py-3 px-4">
             <div class="flex flex-wrap items-end gap-3">
@@ -592,6 +726,20 @@ new #[Layout('components.layouts.app')] class extends Component {
                     </div>
                     <x-button label="⬆ Importer" wire:click="importGrades" class="btn-primary btn-sm" spinner="importGrades" icon="o-arrow-up-tray" />
                 </div>
+
+                {{-- Reset trimester (only when at least one bulletin is still draft) --}}
+                @if($resetCount > 0)
+                <div class="border-l border-base-200 pl-3">
+                    <x-button
+                        label="🔄 Réinitialiser ({{ $resetCount }})"
+                        wire:click="resetTrimester"
+                        class="btn-error btn-outline btn-sm"
+                        spinner="resetTrimester"
+                        icon="o-arrow-path"
+                        tooltip="Supprimer toutes les notes des bulletins en BROUILLON pour ce trimestre"
+                        wire:confirm="⚠️ Réinitialiser le {{ \App\Enums\PeriodEnum::from($selectedPeriod)->label() }} ?&#10;&#10;Toutes les notes des bulletins en « Brouillon » seront supprimées. Cette action est irréversible." />
+                </div>
+                @endif
 
                 @unless($isDirection)
                 <div class="border-l border-base-200 pl-3 ml-auto self-end">
@@ -655,38 +803,76 @@ new #[Layout('components.layouts.app')] class extends Component {
                     @php $effectiveCanEdit = ($bulletin && in_array($bulletin->status->value, ['draft','rejected'])) ? $canEdit : false; @endphp
                     @include('livewire.bulletin._grade-form', ['canEdit' => $effectiveCanEdit])
 
-                    {{-- ── TOTAUX / MOYENNES + DIM. PERS. + OBSERVATIONS panel ── --}}
+                    {{-- ── TOTAUX / MOYENNES + DIM. PERS. + OBSERVATIONS panel (level-aware) ── --}}
+                    @php
+                        $isCpCe1   = in_array(strtoupper((string)$selectedNiveau), ['CP','CE1'], true);
+                        $totalMax  = $summaryScale['total_max'] ?: $totalMaxSum;
+                        $moyMax    = $summaryScale['moyenne_max'];
+                        $moyClsMax = $summaryScale['moyenne_classe_max'];
+                    @endphp
+
                     <div class="rounded-xl border-2 border-indigo-200 bg-gradient-to-br from-indigo-50/60 to-purple-50/60 p-4 space-y-3">
                         <div class="flex items-center gap-2">
                             <span class="text-xl">📊</span>
-                            <h3 class="font-bold text-sm text-indigo-900">TOTAUX / MOYENNES &nbsp;·&nbsp; DIM. PERS. &nbsp;·&nbsp; OBSERVATIONS</h3>
+                            <h3 class="font-bold text-sm text-indigo-900">{{ $summaryScale['group_label'] }} &nbsp;·&nbsp; DIM. PERS. &nbsp;·&nbsp; OBSERVATIONS</h3>
+                            <span class="badge badge-ghost badge-xs">Niveau {{ $selectedNiveau }}</span>
                         </div>
 
+                        @if($isCpCe1)
+                        {{-- CP / CE1 layout: Total/140 — Moyenne/10 — Moyenne classe/10 --}}
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
                             <x-input
-                                label="Total sur {{ $totalMaxSum ?: '?' }}"
+                                label="Total sur {{ $totalMax ?: '?' }}"
                                 wire:model="totalManuel"
-                                type="number" step="0.5" min="0" max="{{ $totalMaxSum ?: 999 }}"
+                                type="number" step="0.5" min="0" max="{{ $totalMax ?: 999 }}"
                                 placeholder="0"
                                 icon="o-calculator"
                                 :disabled="!$effectiveCanEdit" />
 
                             <x-input
-                                label="Moyenne sur 10"
+                                label="Moyenne sur {{ $moyMax }}"
                                 wire:model="moyenne10"
-                                type="number" step="0.1" min="0" max="10"
+                                type="number" step="0.1" min="0" max="{{ $moyMax }}"
                                 placeholder="0.0"
                                 icon="o-chart-bar"
                                 :disabled="!$effectiveCanEdit" />
 
                             <x-input
-                                label="Moyenne de la classe sur 10"
+                                label="Moyenne de la classe sur {{ $moyClsMax }}"
                                 wire:model="moyenneClasse"
-                                type="number" step="0.1" min="0" max="10"
+                                type="number" step="0.1" min="0" max="{{ $moyClsMax }}"
                                 placeholder="0.0"
                                 icon="o-users"
                                 :disabled="!$effectiveCanEdit" />
                         </div>
+                        @else
+                        {{-- CE2 / CM1 / CM2 layout: Moyenne classe/20 — Moyenne/20 — Total/200 --}}
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                            <x-input
+                                label="Moyenne de la classe sur {{ $moyClsMax }}"
+                                wire:model="moyenneClasse"
+                                type="number" step="0.1" min="0" max="{{ $moyClsMax }}"
+                                placeholder="0.0"
+                                icon="o-users"
+                                :disabled="!$effectiveCanEdit" />
+
+                            <x-input
+                                label="Moyenne sur {{ $moyMax }}"
+                                wire:model="moyenne10"
+                                type="number" step="0.1" min="0" max="{{ $moyMax }}"
+                                placeholder="0.0"
+                                icon="o-chart-bar"
+                                :disabled="!$effectiveCanEdit" />
+
+                            <x-input
+                                label="Total sur {{ $totalMax ?: '?' }}"
+                                wire:model="totalManuel"
+                                type="number" step="0.5" min="0" max="{{ $totalMax ?: 999 }}"
+                                placeholder="0"
+                                icon="o-calculator"
+                                :disabled="!$effectiveCanEdit" />
+                        </div>
+                        @endif
 
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                             <x-input
