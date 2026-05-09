@@ -107,10 +107,13 @@ new #[Layout('components.layouts.app')] class extends Component {
     {
         if ($this->selectedPeriod === 'T1' || ! $this->selectedYear) return false;
 
-        $prereq = match($this->selectedPeriod) {
-            'T2' => 'T1', 'T3' => 'T2', default => null,
-        };
-        if (! $prereq) return false;
+        if ($this->selectedPeriod === 'T2') {
+            $prereq = 'T1';
+        } elseif ($this->selectedPeriod === 'T3') {
+            $prereq = 'T2';
+        } else {
+            return false;
+        }
 
         $previous = Bulletin::where('student_id', $studentId)
             ->where('academic_year_id', $this->selectedYear)
@@ -621,11 +624,13 @@ new #[Layout('components.layouts.app')] class extends Component {
             $periodLocked = $this->isPeriodLocked($this->selectedStudent);
 
             if ($periodLocked) {
-                $prev = match($this->selectedPeriod) {
-                    'T2' => '1er Trimestre',
-                    'T3' => '2ème Trimestre',
-                    default => 'trimestre précédent',
-                };
+                if ($this->selectedPeriod === 'T2') {
+                    $prev = '1er Trimestre';
+                } elseif ($this->selectedPeriod === 'T3') {
+                    $prev = '2ème Trimestre';
+                } else {
+                    $prev = 'trimestre précédent';
+                }
                 $lockReason = "Le {$prev} doit être approuvé avant de saisir ce trimestre.";
             } elseif ($this->bulletinId) {
                 $bulletin = Bulletin::with(['teacherSubmissions.teacher', 'approvals'])->find($this->bulletinId);
@@ -774,7 +779,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                         spinner="resetTrimester"
                         icon="o-arrow-path"
                         tooltip="Supprimer toutes les notes des bulletins en BROUILLON pour ce trimestre"
-                        wire:confirm="⚠️ Réinitialiser le {{ \App\Enums\PeriodEnum::from($selectedPeriod)->label() }} ?&#10;&#10;Toutes les notes des bulletins en « Brouillon » seront supprimées. Cette action est irréversible." />
+                        wire:confirm="Réinitialiser ce trimestre ? Toutes les notes des bulletins en Brouillon seront supprimées. Cette action est irréversible." />
                 </div>
                 @endif
 
@@ -783,7 +788,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <x-button label="✈ Tout soumettre" wire:click="bulkSubmitMySubjects" class="btn-success btn-sm" spinner="bulkSubmitMySubjects"
                         icon="o-paper-airplane"
                         tooltip="Soumettre vos notes pour tous les élèves de la classe"
-                        wire:confirm="Soumettre vos notes pour tous les élèves de {{ \App\Enums\PeriodEnum::from($selectedPeriod)->label() }} ?" />
+                        wire:confirm="Soumettre vos notes pour tous les élèves de ce trimestre ?" />
                 </div>
                 @endunless
             </div>
