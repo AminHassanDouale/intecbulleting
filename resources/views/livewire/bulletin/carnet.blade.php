@@ -18,12 +18,75 @@ new #[Layout('components.layouts.print')] class extends Component {
         abort_unless(auth()->check(), 403);
     }
 
+    /**
+     * Level-aware summary scale resolver.
+     *
+     * Mirrors App\Exports\GradeSheetExport::resolveNiveauKeyFromCandidates()
+     * and saisir's resolveSummaryScale() so the carnet, grade entry screen,
+     * and Excel export all show identical maxima for the same student.
+     *
+     * Tries each candidate string in order; the first one containing a
+     * recognised prefix (longest first: CM2, CM1, CE2, CE1, CP) wins.
+     *
+     * @param array<int, string|null> $candidates
+     */
+    public static function resolveSummaryScale(array $candidates): array
+    {
+        $key      = null;
+        $prefixes = ['CM2', 'CM1', 'CE2', 'CE1', 'CP']; // longest first
+
+        foreach ($candidates as $candidate) {
+            if ($candidate === null) continue;
+            $upper = preg_replace('/[^A-Z0-9]/', '', strtoupper(trim((string) $candidate)));
+            if ($upper === '') continue;
+            foreach ($prefixes as $prefix) {
+                if (str_contains($upper, $prefix)) {
+                    $key = $prefix;
+                    break 2;
+                }
+            }
+        }
+
+        if ($key === 'CP') {
+            return [
+                'total_max'          => 140,
+                'moyenne_max'        => 10,
+                'moyenne_classe_max' => 10,
+                'matched_key'        => 'CP',
+            ];
+        }
+
+        if ($key !== null && in_array($key, ['CE1', 'CE2', 'CM1', 'CM2'], true)) {
+            return [
+                'total_max'          => 200,
+                'moyenne_max'        => 20,
+                'moyenne_classe_max' => 20,
+                'matched_key'        => $key,
+            ];
+        }
+
+        return [
+            'total_max'          => 0,    // caller should substitute computed sum
+            'moyenne_max'        => 20,
+            'moyenne_classe_max' => 20,
+            'matched_key'        => null,
+        ];
+    }
+
     public function with(): array
     {
         $this->student->load(['classroom.niveau', 'academicYear']);
 
         $periods       = ['T1', 'T2', 'T3'];
-        $classroomCode = $this->student->classroom->code ?? null;
+
+        // ── Resolve scoping codes the SAME way saisir does ───────────────────
+        //   $sectionCode : full classroom code (e.g. "CPA", "GSB")
+        //   $levelCode   : code stripped of trailing A/B (e.g. "CP", "GS")
+        //   $niveauCode  : niveau->code string (used for whereHas)
+        // ─────────────────────────────────────────────────────────────────────
+        $sectionCode = (string) ($this->student->classroom->code ?? '');
+        $levelCode   = preg_replace('/[AB]$/', '', $sectionCode) ?: $sectionCode;
+        $niveauCode  = $this->student->classroom->niveau->code ?? null;
 
         // ── 1. Academic year ──────────────────────────────────────────────────
         $academicYearId = $this->student->academic_year_id
@@ -44,22 +107,43 @@ new #[Layout('components.layouts.print')] class extends Component {
 
         $gradesByBulletin = $allGrades->groupBy('bulletin_id');
 
-        // ── 4. Subjects for this niveau + classroom ───────────────────────────
-        $subjects = Subject::with(['competences' => fn($q) => $q->orderBy('order')])
-            ->where('niveau_id', $this->student->classroom->niveau_id)
-            ->where(fn($q) => $q
-                ->whereNull('classroom_code')
-                ->orWhere('classroom_code', $classroomCode)
-            )
+        // ── 4. Subjects for this niveau + classroom (mirrors saisir.blade.php) ─
+        //   Three-way scope precedence:
+        //     1. section_code exact match (e.g. "CPA")
+        //     2. classroom_code level match with null section_code (e.g. "CP")
+        //     3. fully global (both null)
+        //   Competences themselves are also filtered by section_code.
+        // ──────────────────────────────────────────────────────────────────────
+        $subjects = Subject::whereHas('niveau', fn($q) => $q->where('code', $niveauCode))
+            ->where(function ($q) use ($sectionCode, $levelCode) {
+                $q->where('section_code', $sectionCode)
+                  ->orWhere(function ($q2) use ($levelCode) {
+                      $q2->whereNull('section_code')
+                         ->where('classroom_code', $levelCode);
+                  })
+                  ->orWhere(function ($q3) {
+                      $q3->whereNull('section_code')
+                         ->whereNull('classroom_code');
+                  });
+            })
+            ->with(['competences' => function ($q) use ($sectionCode) {
+                $q->where(function ($q2) use ($sectionCode) {
+                    $q2->whereNull('section_code')
+                       ->orWhere('section_code', $sectionCode);
+                })->orderBy('order');
+            }])
             ->orderBy('order')
             ->get();
 
         // ── 5. Grades map [period][competence_id] => BulletinGrade ───────────
+        // No status filter: render whatever's stored in the DB regardless of
+        // the bulletin's workflow status. The caller (route) controls who can
+        // view the carnet at all.
         $gradesMap = [];
         foreach ($periods as $p) {
             $gradesMap[$p] = [];
             $b = $bulletins->get($p);
-            if (!$b || $b->status === BulletinStatusEnum::DRAFT) continue;
+            if (!$b) continue;
             $grades = $gradesByBulletin->get($b->id, collect());
             foreach ($grades as $grade) {
                 $gradesMap[$p][$grade->competence_id] = $grade;
@@ -107,16 +191,31 @@ new #[Layout('components.layouts.print')] class extends Component {
             }
         }
 
-        // ── 7. Max total: sum of all subjects' max_score ──────────────────────
-        $maxTotal = $subjects->sum(fn($s) => (int) ($s->max_score ?? 0));
-        if ($maxTotal === 0) $maxTotal = '—';
+        // ── 7. Summary scale — IDENTICAL logic to saisir + GradeSheetExport ──
+        //   CP  (A/B)            → Total sur 140, Moyenne sur 10
+        //   CE1/CE2/CM1/CM2 (any)→ Total sur 200, Moyenne sur 20
+        //   Unknown niveau       → falls back to sum of subject->max_score
+        // ─────────────────────────────────────────────────────────────────────
+        $summaryCandidates = [
+            $niveauCode,
+            $sectionCode,
+            (string) ($this->student->classroom->label ?? ''),
+            $levelCode,
+        ];
+        $summaryScale = self::resolveSummaryScale($summaryCandidates);
+
+        $computedMaxTotal = $subjects->sum(fn($s) => (int) ($s->max_score ?? 0));
+
+        $maxTotal      = $summaryScale['total_max'] ?: ($computedMaxTotal ?: '—');
+        $moyenneMax    = $summaryScale['moyenne_max'];
+        $moyenneClsMax = $summaryScale['moyenne_classe_max'];
 
         // ── 8. Per-period totals ───────────────────────────────────────────────
         $periodTotals = [];
 
         foreach ($periods as $p) {
-            $b         = $bulletins->get($p);
-            $isVisible = $b && $b->status !== BulletinStatusEnum::DRAFT;
+            $b           = $bulletins->get($p);
+            $isVisible   = $b !== null;          // any bulletin row counts
             $isPublished = $b && $b->status === BulletinStatusEnum::PUBLISHED;
 
             if (!$isVisible || !$b) {
@@ -126,6 +225,8 @@ new #[Layout('components.layouts.print')] class extends Component {
                     'class_moyenne'     => null,
                     'teacher_comment'   => null,
                     'direction_comment' => null,
+                    'observation'       => null,
+                    'discipline_status' => null,
                     'published'         => false,
                 ];
                 continue;
@@ -133,7 +234,7 @@ new #[Layout('components.layouts.print')] class extends Component {
 
             $total          = 0.0;
             $maxTotalFloat  = 0.0;
-            $allSubjectsHaveGrades = true;
+            $anySubjectGraded = false;   // at least one subject has at least one graded competence
 
             foreach ($subjects as $subject) {
                 $subjectMax    = (float) ($subject->max_score ?? 0);
@@ -143,7 +244,7 @@ new #[Layout('components.layouts.print')] class extends Component {
                 if ($compCount === 0 || $subjectMax === 0) continue;
 
                 $maxTotalFloat += $subjectMax;
-                $isPrescolaire  = $subject->scale_type === 'competence';
+                $isPrescolaireSub = $subject->scale_type === 'competence';
 
                 $subjectScore   = 0.0;
                 $gradedCount    = 0;
@@ -152,7 +253,7 @@ new #[Layout('components.layouts.print')] class extends Component {
                     $grade = $gradesMap[$p][$competence->id] ?? null;
                     if (!$grade) continue;
 
-                    if ($isPrescolaire && $grade->competence_status !== null) {
+                    if ($isPrescolaireSub && $grade->competence_status !== null) {
                         $status = is_string($grade->competence_status)
                             ? $grade->competence_status
                             : $grade->competence_status->value;
@@ -172,29 +273,34 @@ new #[Layout('components.layouts.print')] class extends Component {
                     }
                 }
 
-                if ($gradedCount === 0) {
-                    $allSubjectsHaveGrades = false;
-                }
+                if ($gradedCount > 0) $anySubjectGraded = true;
 
                 $total += $subjectScore;
             }
 
-            $moyenne = ($maxTotalFloat > 0 && $allSubjectsHaveGrades)
-                ? round(($total / $maxTotalFloat) * 10, 2)
+            // Compute moyenne on the level scale (10 for CP, 20 for CE1+).
+            // Never returns NULL when at least one grade exists — partial data
+            // is better than nothing for a printable carnet.
+            $moyenne = ($maxTotalFloat > 0 && $anySubjectGraded)
+                ? round(($total / $maxTotalFloat) * $moyenneMax, 2)
                 : null;
 
-            $modelTotal   = $b->total_score ?? null;
-            $modelMoyenne = $b->moyenne     ?? null;
+            // Read saisir/export field names FIRST (total_manuel, moyenne_10),
+            // fall back to legacy fields (total_score, moyenne) for old data.
+            // NB: only null is treated as "no value"; 0 is a valid score.
+            $modelTotal   = $b->total_manuel  ?? $b->total_score ?? null;
+            $modelMoyenne = $b->moyenne_10    ?? $b->moyenne     ?? null;
 
-            $finalTotal   = ($modelTotal   !== null && $modelTotal   > 0) ? $modelTotal   : ($allSubjectsHaveGrades ? round($total, 2) : null);
-            $finalMoyenne = ($modelMoyenne !== null && $modelMoyenne > 0) ? $modelMoyenne : $moyenne;
+            $finalTotal   = ($modelTotal   !== null) ? (float) $modelTotal   : ($anySubjectGraded ? round($total, 2) : null);
+            $finalMoyenne = ($modelMoyenne !== null) ? (float) $modelMoyenne : $moyenne;
 
             $classMoyenne = null;
             if ($isVisible) {
+                // No status filter — include all classmates that have any
+                // bulletin row, regardless of workflow status.
                 $classBulletins = Bulletin::where('classroom_id', $this->student->classroom_id)
                     ->where('academic_year_id', $academicYearId)
                     ->where('period', $p)
-                    ->whereNotIn('status', [BulletinStatusEnum::DRAFT->value])
                     ->get();
 
                 if ($classBulletins->count() > 1) {
@@ -206,7 +312,7 @@ new #[Layout('components.layouts.print')] class extends Component {
                         $cbGrades   = $allClassGrades->get($cb->id, collect());
                         $cbTotal    = 0.0;
                         $cbMaxTotal = 0.0;
-                        $cbAllGraded = true;
+                        $cbAnyGraded = false;
 
                         foreach ($subjects as $subject) {
                             $subjectMax  = (float) ($subject->max_score ?? 0);
@@ -214,7 +320,7 @@ new #[Layout('components.layouts.print')] class extends Component {
                             if ($compCount === 0 || $subjectMax === 0) continue;
 
                             $cbMaxTotal    += $subjectMax;
-                            $isPrescolaire  = $subject->scale_type === 'competence';
+                            $isPrescolaireSub = $subject->scale_type === 'competence';
                             $cbSubScore     = 0.0;
                             $cbGraded       = 0;
 
@@ -222,7 +328,7 @@ new #[Layout('components.layouts.print')] class extends Component {
                                 $g = $cbGrades->firstWhere('competence_id', $competence->id);
                                 if (!$g) continue;
 
-                                if ($isPrescolaire && $g->competence_status !== null) {
+                                if ($isPrescolaireSub && $g->competence_status !== null) {
                                     $st = is_string($g->competence_status) ? $g->competence_status : $g->competence_status->value;
                                     $compMax = (float) ($competence->max_score ?? $subjectMax / $compCount);
                                     $cbSubScore += match($st) { 'A' => $compMax, 'EVA' => $compMax * 0.5, 'NA' => 0, default => 0 };
@@ -235,12 +341,12 @@ new #[Layout('components.layouts.print')] class extends Component {
                                 }
                             }
 
-                            if ($cbGraded === 0) $cbAllGraded = false;
+                            if ($cbGraded > 0) $cbAnyGraded = true;
                             $cbTotal += $cbSubScore;
                         }
 
-                        if ($cbAllGraded && $cbMaxTotal > 0) {
-                            $classMoyennes[] = ($cbTotal / $cbMaxTotal) * 10;
+                        if ($cbAnyGraded && $cbMaxTotal > 0) {
+                            $classMoyennes[] = ($cbTotal / $cbMaxTotal) * $moyenneMax;
                         }
                     }
 
@@ -249,8 +355,9 @@ new #[Layout('components.layouts.print')] class extends Component {
                     }
                 }
 
-                if ($classMoyenne === null && ($b->class_moyenne ?? 0) > 0) {
-                    $classMoyenne = $b->class_moyenne;
+                if ($classMoyenne === null) {
+                    $cm = $b->moyenne_classe ?? $b->class_moyenne ?? null;
+                    if ($cm !== null) $classMoyenne = (float) $cm;
                 }
             }
 
@@ -260,6 +367,13 @@ new #[Layout('components.layouts.print')] class extends Component {
                 'class_moyenne'     => $classMoyenne,
                 'teacher_comment'   => $b->teacher_comment   ?? null,
                 'direction_comment' => $b->direction_comment ?? $b->appreciation ?? null,
+                // Unified observation — first non-empty of teacher / direction / appreciation.
+                // Used by the back-panel APPRECIATIONS GENERALES table on page 1.
+                'observation'       => $b->teacher_comment
+                                    ?: $b->direction_comment
+                                    ?: $b->appreciation
+                                    ?: null,
+                'discipline_status' => $b->discipline_status ?? null,
                 'published'         => $isPublished,
             ];
         }
@@ -270,9 +384,34 @@ new #[Layout('components.layouts.print')] class extends Component {
 
         $romanNumerals = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'];
 
+        // ── 9. Préscolaire — group competences by `domaine` within each subject
+        //      Produces: $subjectDomains[subject_id] = [
+        //          ['domaine' => 'LANGAGE ORAL', 'competences' => Collection<Competence>],
+        //          ['domaine' => 'PRÉLECTURE',   'competences' => Collection<Competence>],
+        //          ...
+        //      ]
+        //      Order is preserved: first time a domaine appears in the (already
+        //      ->orderBy('order')) competences list determines its slot.
+        //      Falls back to the subject name when `domaine` is null.
+        // ──────────────────────────────────────────────────────────────────────
+        $subjectDomains = [];
+        foreach ($subjects as $subject) {
+            $groups = [];
+            foreach ($subject->competences as $competence) {
+                $key = $competence->domaine ?? $competence->domain ?? $subject->name;
+                if (!isset($groups[$key])) {
+                    $groups[$key] = ['domaine' => $key, 'competences' => collect()];
+                }
+                $groups[$key]['competences']->push($competence);
+            }
+            $subjectDomains[$subject->id] = array_values($groups);
+        }
+
         return compact(
             'subjects', 'periods', 'statusMap', 'scoreDisplay', 'gradesMap',
-            'periodTotals', 'maxTotal', 'yearLabel', 'romanNumerals', 'bulletins'
+            'periodTotals', 'maxTotal', 'moyenneMax', 'moyenneClsMax',
+            'summaryScale', 'yearLabel', 'romanNumerals', 'bulletins',
+            'subjectDomains'
         );
     }
 }; ?>
@@ -285,6 +424,53 @@ $niveauLabel   = $student->classroom->niveau->code ?? '';
 @endphp
 
 <div>
+
+{{-- ══════════════════════════════════════════════════════════════════
+     DEBUG STRIP — admin/direction only, screen only.
+     Shows exactly what's stored in the DB so we can confirm whether
+     totals/observations/discipline are missing because the carnet
+     can't read them, or because they were never saved.
+     Remove this block once you've verified the data flow.
+     ══════════════════════════════════════════════════════════════════ --}}
+@if(auth()->check() && auth()->user()->hasAnyRole(['admin','direction']))
+<div style="background:#fef9c3;border:2px solid #ca8a04;border-radius:6px;padding:8px 14px;margin:6px;font-family:monospace;font-size:11px;color:#3f3f00;line-height:1.45;" class="bk-no-print ps-no-print">
+<strong style="font-size:13px;">🔍 DEBUG — Carnet data inspection</strong><br>
+Student: <b>{{ $student->full_name }}</b> (id={{ $student->id }})
+| Classroom: <b>{{ $student->classroom->code }}</b>
+| Niveau code: <b>{{ $student->classroom->niveau->code ?? 'NULL' }}</b>
+| Cycle: <b>{{ $student->classroom->niveau->cycle ?? 'NULL' }}</b>
+| isPrescolaire: <b>{{ $isPrescolaire ? 'YES' : 'no' }}</b>
+<br>
+Subjects loaded: <b>{{ $subjects->count() }}</b>
+@if($subjects->isNotEmpty())
+({{ $subjects->pluck('name')->join(', ') }})
+@endif
+<br>
+Bulletins:
+@forelse($bulletins as $p => $b)
+<br>&nbsp;&nbsp;• T={{ $p }}
+| status=<b>{{ $b->status->value ?? '—' }}</b>
+| grades=<b>{{ $b->grades->count() ?? 0 }}</b>
+| total_manuel=<b>{{ $b->total_manuel ?? 'NULL' }}</b>
+| moyenne_10=<b>{{ $b->moyenne_10 ?? 'NULL' }}</b>
+| moyenne_classe=<b>{{ $b->moyenne_classe ?? 'NULL' }}</b>
+| discipline=<b>{{ $b->discipline_status ?? 'NULL' }}</b>
+| teacher_comment=<b>{{ $b->teacher_comment ? '"'.mb_substr($b->teacher_comment,0,40).'…"' : 'NULL' }}</b>
+@empty
+<br>&nbsp;&nbsp;• No bulletins found for academic year.
+@endforelse
+<br>
+periodTotals (what the carnet renders):
+@foreach(['T1','T2','T3'] as $_p)
+<br>&nbsp;&nbsp;• {{ $_p }}: total=<b>{{ $periodTotals[$_p]['total'] ?? 'NULL' }}</b>
+| moyenne=<b>{{ $periodTotals[$_p]['moyenne'] ?? 'NULL' }}</b>
+| class_moyenne=<b>{{ $periodTotals[$_p]['class_moyenne'] ?? 'NULL' }}</b>
+| discipline_status=<b>{{ $periodTotals[$_p]['discipline_status'] ?? 'NULL' }}</b>
+| teacher_comment=<b>{{ ($periodTotals[$_p]['teacher_comment'] ?? null) ? 'YES' : 'NULL' }}</b>
+@endforeach
+</div>
+@endif
+
 @if($isPrescolaire)
 {{-- ══════════════════════════════════════════════════════════════
      PRÉSCOLAIRE — Format A4 paysage recto-verso (1 feuille)
@@ -325,12 +511,6 @@ $_psTeacherName = $student->classroom->teacher?->name ?? '—';
            border:4px solid #6B5000;}
 .ps-left  {border-right:2px solid #6B5000;}
 .ps-right {border-left:2px solid #6B5000;}
-
-.ps-logo  {background:#1a5c00;display:inline-block;}
-.ps-logo-t{display:flex;align-items:stretch;}
-.ps-li    {background:#ED7D31;color:#fff;font-size:11pt;font-weight:900;font-style:italic;padding:1.5mm 2mm;display:flex;align-items:center;}
-.ps-lt    {color:#fff;font-size:11pt;font-weight:900;padding:1.5mm 3mm;display:flex;align-items:center;letter-spacing:2px;}
-.ps-lb    {color:#fff;font-size:7.5pt;font-weight:700;letter-spacing:4px;padding:1mm 2.5mm 1.5mm;text-align:center;}
 
 .ps-cover  {display:flex;flex-direction:column;align-items:center;height:100%;}
 .ps-sch-row{display:flex;align-items:center;gap:3mm;width:100%;margin-bottom:3mm;}
@@ -417,7 +597,7 @@ $_psTeacherName = $student->classroom->teacher?->name ?? '—';
       </div>
     </div>
 
-    {{-- RIGHT: TABLEAU DES COMPÉTENCES --}}
+    {{-- RIGHT: TABLEAU DES COMPÉTENCES — grouped by `domaine` --}}
     <div class="ps-panel ps-right">
       <div style="display:flex;justify-content:space-between;align-items:baseline;border-bottom:1.5px solid #6B5000;padding-bottom:1mm;margin-bottom:2mm;">
         <span style="font-size:7.5pt;font-weight:700;text-transform:uppercase;">Tableau des compétences</span>
@@ -437,29 +617,44 @@ $_psTeacherName = $student->classroom->teacher?->name ?? '—';
           </tr>
         </thead>
         <tbody>
-          @foreach($subjects as $subIdx => $subject)
-          @php $comps = $subject->competences; @endphp
-          @if($subIdx > 0)
-          <tr><td colspan="5" class="ps-sep"></td></tr>
-          <tr><td></td><td></td><th class="ps-sub-h">A</th><th class="ps-sub-h">EVA</th><th class="ps-sub-h">NA</th></tr>
-          @endif
-          @forelse($comps as $cIdx => $competence)
-          @php $st = $statusMap[$_dpPres][$competence->id] ?? null; @endphp
-          <tr>
-            @if($cIdx === 0)
-            <td class="ps-dom-c" rowspan="{{ $comps->count() }}"><strong>{{ strtoupper($subject->name) }}</strong></td>
-            @endif
-            <td class="ps-comp-c">{{ $competence->description ?? $competence->code }}</td>
-            <td class="ps-score">{{ $st === 'A'   ? 'A'   : '' }}</td>
-            <td class="ps-score">{{ $st === 'EVA' ? 'EVA' : '' }}</td>
-            <td class="ps-score">{{ $st === 'NA'  ? 'NA'  : '' }}</td>
-          </tr>
-          @empty
-          <tr>
-            <td class="ps-dom-c"><strong>{{ strtoupper($subject->name) }}</strong></td>
-            <td colspan="4" style="font-style:italic;color:#999;text-align:center;font-size:6.5pt;">Aucune compétence.</td>
-          </tr>
-          @endforelse
+          @php $_psDomainIdx = 0; @endphp
+          @foreach($subjects as $subject)
+            @foreach($subjectDomains[$subject->id] ?? [] as $group)
+              @php $comps = $group['competences']; $_psDomainIdx++; @endphp
+
+              {{-- Yellow separator + sub-header between domain groups --}}
+              @if($_psDomainIdx > 1)
+                <tr><td colspan="5" class="ps-sep"></td></tr>
+                <tr>
+                  <td></td><td></td>
+                  <th class="ps-sub-h">A</th>
+                  <th class="ps-sub-h">EVA</th>
+                  <th class="ps-sub-h">NA</th>
+                </tr>
+              @endif
+
+              @forelse($comps as $cIdx => $competence)
+                @php $st = $statusMap[$_dpPres][$competence->id] ?? null; @endphp
+                <tr>
+                  @if($cIdx === 0)
+                    <td class="ps-dom-c" rowspan="{{ $comps->count() }}">
+                      <strong>{{ strtoupper($group['domaine']) }}</strong>
+                    </td>
+                  @endif
+                  <td class="ps-comp-c">{{ $competence->description ?? $competence->code }}</td>
+                  <td class="ps-score">{{ $st === 'A'   ? 'A'   : '' }}</td>
+                  <td class="ps-score">{{ $st === 'EVA' ? 'EVA' : '' }}</td>
+                  <td class="ps-score">{{ $st === 'NA'  ? 'NA'  : '' }}</td>
+                </tr>
+              @empty
+                <tr>
+                  <td class="ps-dom-c"><strong>{{ strtoupper($group['domaine']) }}</strong></td>
+                  <td colspan="4" style="font-style:italic;color:#999;text-align:center;font-size:6.5pt;">
+                    Aucune compétence.
+                  </td>
+                </tr>
+              @endforelse
+            @endforeach
           @endforeach
         </tbody>
       </table>
@@ -509,13 +704,8 @@ $_psTeacherName = $student->classroom->teacher?->name ?? '—';
       <p class="ps-cm-lbl" style="margin-top:0;border-top:none;padding-top:0;">Commentaires de l'enseignant(e) :</p>
       <div class="ps-cm-box">{{ $_dpTeacherComment ?: '' }}</div>
 
-      @if($_dpDirectionComment)
       <p class="ps-cm-lbl">Observation de la Direction :</p>
-      <div class="ps-cm-box">{{ $_dpDirectionComment }}</div>
-      @else
-      <p class="ps-cm-lbl">Observation de la Direction :</p>
-      <div class="ps-cm-box"></div>
-      @endif
+      <div class="ps-cm-box">{{ $_dpDirectionComment ?: '' }}</div>
 
       <div style="flex:1;"></div>
 
@@ -541,93 +731,73 @@ $_psTeacherName = $student->classroom->teacher?->name ?? '—';
      ══════════════════════════════════════════════════════════════ --}}
 
 <style>
-/* Override @page pour le paysage */
 @page { size: A4 landscape; margin: 0; }
 @media print { body { background:#fff; } .bk-wrap { padding:0; gap:0; } .bk-no-print { display:none !important; } }
 
-/* ── Livret ── */
 *, *::before, *::after { box-sizing: border-box; }
-.bk-wrap  { display:flex; flex-direction:column; align-items:center; gap:8mm; padding:8mm; }
+.bk-wrap  { display:flex; flex-direction:column; align-items:center; gap:6mm; padding:6mm; }
 .bk-page  { width:297mm; height:210mm; display:flex; flex-direction:row; background:#fff;
-            page-break-after:always; overflow:hidden; font-size:8pt; color:#000;
+            page-break-after:always; overflow:hidden; font-size:7pt; color:#000;
             font-family:Arial,sans-serif; box-shadow:0 3px 14px rgba(0,0,0,.3); }
-.bk-panel { width:148.5mm; height:210mm; padding:5mm 6mm; overflow:hidden; position:relative; }
+.bk-panel { width:148.5mm; height:210mm; padding:4mm 5mm; overflow:hidden; position:relative; }
 .bk-left  { border-right:1.5px solid #000; }
 
-/* ── En-têtes de page ── */
 .bk-pbar { display:flex; justify-content:space-between; align-items:baseline;
-           border-bottom:2px solid #000; padding-bottom:1.5mm; margin-bottom:1.5mm; }
-.bk-pbar span { font-size:8.5pt; font-weight:700; text-transform:uppercase; }
+           border-bottom:1.5px solid #000; padding-bottom:1mm; margin-bottom:1mm; }
+.bk-pbar span { font-size:7.5pt; font-weight:700; text-transform:uppercase; }
 
-/* ── Label section ── */
-.bk-sl { font-size:7.5pt; font-weight:700; text-transform:uppercase; margin:2mm 0 0.8mm; }
+.bk-sl { font-size:7pt; font-weight:700; text-transform:uppercase; margin:1.5mm 0 0.6mm; }
 
-/* ── En-tête des périodes ── */
 .bk-ph { width:100%; border-collapse:collapse; table-layout:fixed; }
 .bk-ph th { border:1px solid #000; font-size:6.5pt; font-weight:700; text-align:center; padding:0.5mm; }
 .bk-ph .ph-blank { width:52%; background:#fff; border:none; border-right:1px solid #000; }
 .bk-ph .ph-top   { background:#A6A6A6; }
 .bk-ph .ph-sub   { background:#D9D9D9; font-size:6pt; }
 
-/* ── Table de notes ── */
-.bk-gt { width:100%; border-collapse:collapse; margin-bottom:0.5mm; table-layout:fixed; }
-.bk-gt td { border:1px solid #000; vertical-align:middle; padding:0.5mm 1.2mm; font-size:7pt; background:#fff; }
+.bk-gt { width:100%; border-collapse:collapse; margin-bottom:0.4mm; table-layout:fixed; }
+.bk-gt td { border:1px solid #000; vertical-align:middle; padding:0.4mm 1.2mm; font-size:7pt; background:#fff; line-height:1.2; }
 .bk-gt tbody tr:nth-child(even) td { background:#BFBFBF; }
 .bk-cb  { width:52%; }
 .bk-p   { width:6.7%; text-align:center; font-weight:700; }
 .bk-aen { width:5%;   text-align:center; }
 
-/* ── Totaux ── */
-.bk-tt { width:100%; border-collapse:collapse; margin-top:2mm; table-layout:fixed; }
-.bk-tt td { border:1px solid #000; padding:1mm 2mm; font-size:8pt; background:#fff; text-align:center; }
+.bk-tt { width:100%; border-collapse:collapse; margin-top:1.2mm; table-layout:fixed; }
+.bk-tt td { border:1px solid #000; padding:0.8mm 1.5mm; font-size:7.5pt; background:#fff; text-align:center; }
 .bk-tt .lbl { text-align:left; font-weight:700; background:#D9D9D9; width:40%; }
-.bk-tt .big { font-size:10pt; font-weight:700; }
+.bk-tt .big { font-size:9pt; font-weight:700; }
 
-/* ── Légende ── */
-.bk-leg { width:100%; border-collapse:collapse; margin-top:2mm; font-size:7pt; }
-.bk-leg th { border:1px solid #000; padding:0.8mm 1mm; font-weight:700; text-align:center; background:#A6A6A6; }
+.bk-leg { width:100%; border-collapse:collapse; margin-top:1.2mm; font-size:6.5pt; }
+.bk-leg th { border:1px solid #000; padding:0.6mm 0.8mm; font-weight:700; text-align:center; background:#A6A6A6; }
 .bk-leg th.lh { text-align:left; }
-.bk-leg td { border:1px solid #000; padding:0.8mm 1mm; text-align:center; background:#fff; }
+.bk-leg td { border:1px solid #000; padding:0.6mm 0.8mm; text-align:center; background:#fff; }
 .bk-leg td.lbl { text-align:left; font-weight:700; background:#D9D9D9; }
 
-/* ── Appréciations ── */
-.bk-at { width:100%; border-collapse:collapse; font-size:7.5pt; }
-.bk-at th { border:1px solid #000; background:#A6A6A6; font-weight:700; text-align:center; padding:1mm 1.5mm; }
-.bk-at th.title { background:#D9D9D9; font-size:9pt; }
-.bk-at td { border:1px solid #000; padding:1.5mm 2mm; vertical-align:top; background:#fff; }
+.bk-at { width:100%; border-collapse:collapse; font-size:7pt; }
+.bk-at th { border:1px solid #000; background:#A6A6A6; font-weight:700; text-align:center; padding:0.8mm 1.2mm; }
+.bk-at th.title { background:#D9D9D9; font-size:8.5pt; }
+.bk-at td { border:1px solid #000; padding:1.2mm 1.5mm; vertical-align:top; background:#fff; }
 .bk-at .per { text-align:center; font-weight:700; width:13%; vertical-align:middle; background:#D9D9D9; }
 .bk-at .obs { width:43%; }
-.bk-at .sig { width:22%; text-align:center; vertical-align:bottom; font-size:6.5pt; color:#444; }
-.bk-sline   { display:block; border-bottom:1px solid #555; margin:8mm auto 1mm; width:75%; }
+.bk-at .sig { width:22%; text-align:center; vertical-align:bottom; font-size:6pt; color:#444; }
+.bk-sline   { display:block; border-bottom:1px solid #555; margin:6mm auto 0.8mm; width:75%; }
 
-/* ── Test de fin d'année ── */
-.bk-tft { width:62%; border-collapse:collapse; margin:1.5mm 0 1.5mm 4mm; font-size:7.5pt; }
-.bk-tft td { border:1px solid #000; padding:1.2mm 2mm; background:#fff; }
+.bk-tft { width:62%; border-collapse:collapse; margin:1mm 0 1mm 4mm; font-size:7pt; }
+.bk-tft td { border:1px solid #000; padding:1mm 1.5mm; background:#fff; }
 .bk-tft td:first-child { font-weight:700; }
 .bk-tft td:last-child  { width:36%; }
 
-/* ── Décision ── */
-.bk-dec { border:1.5px solid #000; margin-top:2mm; }
-.bk-chk { width:3.5mm; height:3.5mm; border:1.5px solid #000; display:inline-block; flex-shrink:0; }
+.bk-dec { border:1.5px solid #000; margin-top:1.5mm; }
+.bk-chk { width:3mm; height:3mm; border:1.5px solid #000; display:inline-block; flex-shrink:0; }
 
-/* ── Couverture ── */
 .bk-cover { display:flex; flex-direction:column; align-items:center; }
-.bk-republic { font-size:8pt; font-weight:700; text-transform:uppercase; letter-spacing:1px; margin-bottom:2.5mm; text-align:center; }
-.bk-logo { background:#1a5c00; display:inline-block; margin-bottom:3mm; }
-.bk-logo-top { display:flex; align-items:stretch; }
-.bk-logo-in  { background:#ED7D31; color:#fff; font-size:16pt; font-weight:900; font-style:italic;
-               padding:2.5mm 3mm; display:flex; align-items:center; }
-.bk-logo-tec { color:#fff; font-size:16pt; font-weight:900; padding:2.5mm 4.5mm;
-               display:flex; align-items:center; letter-spacing:2px; }
-.bk-logo-bot { color:#fff; font-size:11pt; font-weight:700; letter-spacing:6px;
-               padding:1.5mm 4mm 2mm; text-align:center; }
-.bk-cov-school  { font-size:11pt; font-weight:900; text-transform:uppercase; text-align:center; margin-bottom:1mm; }
-.bk-cov-carnet  { font-size:13pt; font-weight:400; text-align:center; margin:1mm 0; }
-.bk-cov-classe  { font-size:18pt; font-weight:900; text-align:center; margin-bottom:3mm; }
-.bk-infobox { border:2.5px solid #000; border-radius:8px; padding:3mm 5mm; width:100%;
-              font-size:8.5pt; background:#fff; line-height:2; }
+.bk-republic { font-size:7.5pt; font-weight:700; text-transform:uppercase; letter-spacing:1px; margin-bottom:2mm; text-align:center; }
+.bk-cov-school  { font-size:10.5pt; font-weight:900; text-transform:uppercase; text-align:center; margin-bottom:1mm; }
+.bk-cov-carnet  { font-size:12pt; font-weight:400; text-align:center; margin:0.8mm 0; }
+.bk-cov-classe  { font-size:17pt; font-weight:900; text-align:center; margin-bottom:2.5mm; }
+.bk-infobox { border:2.5px solid #000; border-radius:8px; padding:2.5mm 4mm; width:100%;
+              font-size:8pt; background:#fff; line-height:1.85; }
 .bk-infobox .ir { display:flex; }
-.bk-infobox .il { flex-shrink:0; min-width:38mm; }
+.bk-infobox .il { flex-shrink:0; min-width:36mm; }
 .bk-infobox .iv { font-weight:700; }
 </style>
 
@@ -658,13 +828,10 @@ $nextClassCode = \App\Models\StudentPromotion::nextClassCode($classCode);
 
 <div class="bk-wrap">
 
-{{-- ═══════════════════════════════════════════
-     PAGE 1 — EXTÉRIEUR
-     Gauche = Dos / Appréciations   Droite = Couverture
-     ═══════════════════════════════════════════ --}}
+{{-- ═══ PAGE 1 — EXTÉRIEUR ═══ --}}
 <div class="bk-page">
 
-    {{-- ▌ PANNEAU GAUCHE : DOS ▌ --}}
+    {{-- ▌ DOS / APPRÉCIATIONS ▌ --}}
     <div class="bk-panel bk-left">
 
         <div style="display:flex;justify-content:space-between;margin-bottom:1mm;">
@@ -693,8 +860,10 @@ $nextClassCode = \App\Models\StudentPromotion::nextClassCode($classCode);
                 <tr>
                     <td class="per">{!! $num !!}<br><strong>{{ $lbl }}</strong></td>
                     <td class="obs">
-                        @if($periodTotals[$p]['teacher_comment'])
-                            {{ $periodTotals[$p]['teacher_comment'] }}<br><br>
+                        {{-- Falls back: teacher_comment → direction_comment → appreciation.
+                             Whichever column actually has data, render it. --}}
+                        @if($periodTotals[$p]['observation'])
+                            {{ $periodTotals[$p]['observation'] }}<br><br>
                         @else
                             <br><br><br>
                         @endif
@@ -749,7 +918,7 @@ $nextClassCode = \App\Models\StudentPromotion::nextClassCode($classCode);
 
     </div>{{-- /DOS --}}
 
-    {{-- ▌ PANNEAU DROIT : COUVERTURE ▌ --}}
+    {{-- ▌ COUVERTURE ▌ --}}
     <div class="bk-panel">
         <div class="bk-cover">
 
@@ -776,13 +945,10 @@ $nextClassCode = \App\Models\StudentPromotion::nextClassCode($classCode);
 
 </div>{{-- /PAGE 1 --}}
 
-{{-- ═══════════════════════════════════════════
-     PAGE 2 — INTÉRIEUR
-     Gauche = premières matières   Droite = reste + totaux + légende
-     ═══════════════════════════════════════════ --}}
+{{-- ═══ PAGE 2 — INTÉRIEUR ═══ --}}
 <div class="bk-page">
 
-    {{-- ▌ PANNEAU GAUCHE : MATIÈRES (première moitié) ▌ --}}
+    {{-- ▌ GAUCHE : MATIÈRES (première moitié) ▌ --}}
     <div class="bk-panel bk-left">
 
         <div class="bk-pbar">
@@ -790,8 +956,13 @@ $nextClassCode = \App\Models\StudentPromotion::nextClassCode($classCode);
             <span>INTEC ECOLE</span>
         </div>
 
-        {{-- En-tête des périodes --}}
         <table class="bk-ph">
+            <tr>
+                <th class="ph-blank"></th>
+                <th colspan="3" class="ph-top" style="font-size:6pt;background:#737373;color:#fff;letter-spacing:0.5px;">Trimestre 1</th>
+                <th colspan="3" class="ph-top" style="font-size:6pt;background:#737373;color:#fff;letter-spacing:0.5px;">Trimestre 2</th>
+                <th colspan="3" class="ph-top" style="font-size:6pt;background:#737373;color:#fff;letter-spacing:0.5px;">Trimestre 3</th>
+            </tr>
             <tr>
                 <th class="ph-blank"></th>
                 <th colspan="3" class="ph-top">PERIODE 1</th>
@@ -845,13 +1016,18 @@ $nextClassCode = \App\Models\StudentPromotion::nextClassCode($classCode);
 
     </div>{{-- /GAUCHE --}}
 
-    {{-- ▌ PANNEAU DROIT : MATIÈRES (seconde moitié) + Totaux + Légende ▌ --}}
-    <div class="bk-panel">
+    {{-- ▌ DROITE : MATIÈRES (seconde moitié) + Totaux + Légende ▌ --}}
+    <div class="bk-panel" style="display:flex;flex-direction:column;">
 
-        <div class="bk-pbar">
+        <div class="bk-pbar" style="flex-shrink:0;">
             <span>CARNET D'EVALUATION {{ strtoupper($classCode) }}</span>
             <span style="font-size:7.5pt;text-transform:none;">Année scolaire : {{ $yearLabel }}</span>
         </div>
+
+        {{-- Scrollable/clippable middle: subjects + DIM PERS + totals.
+             min-height:0 lets flex actually shrink this box; overflow:hidden
+             keeps the panel boundary clean if subjects are very long. --}}
+        <div style="flex:1 1 auto;min-height:0;overflow:hidden;">
 
         @foreach($subjectsRight as $ridx => $subject)
         @php $globalIdx = $splitAt + $ridx; @endphp
@@ -891,8 +1067,38 @@ $nextClassCode = \App\Models\StudentPromotion::nextClassCode($classCode);
         </table>
         @endforeach
 
-        {{-- TOTAUX --}}
-        <table class="bk-tt">
+        {{-- DIMENSION PERSONNELLE — single discipline row matching the
+             reference doc layout (Roman numeral after the last subject).
+             Uses bulletin->discipline_status (text like "Très-bien"). --}}
+        @php
+            $_dimIdx = ($splitAt + $subjectsRight->count());
+        @endphp
+        <p class="bk-sl">{{ $romanNumerals[$_dimIdx] ?? ($_dimIdx + 1) }} – DIMENSION PERSONNELLE : Appréciation</p>
+        <table class="bk-gt">
+            <colgroup>
+                <col class="bk-cb">
+                <col class="bk-p"><col class="bk-aen"><col class="bk-aen">
+                <col class="bk-p"><col class="bk-aen"><col class="bk-aen">
+                <col class="bk-p"><col class="bk-aen"><col class="bk-aen">
+            </colgroup>
+            <tbody>
+                <tr>
+                    <td class="bk-cb">Discipline, assiduité, ponctualité, respect des règles, participation…</td>
+                    @foreach(['T1','T2','T3'] as $_p)
+                        <td class="bk-p" style="font-weight:700;">{{ $periodTotals[$_p]['discipline_status'] ?? '' }}</td>
+                        <td class="bk-aen"></td>
+                        <td class="bk-aen"></td>
+                    @endforeach
+                </tr>
+            </tbody>
+        </table>
+
+        </div>{{-- /middle scrollable area (DIM PERS table is the last thing inside) --}}
+
+        {{-- TOTAUX / MOYENNES + DIM. PERS. — anchored at panel bottom, never clipped.
+             Labels are level-aware (CP=140/10, CE1+/=200/20) and mirror the
+             saisir grade-entry screen and the Excel export exactly. --}}
+        <table class="bk-tt" style="flex-shrink:0;margin-top:auto;">
             <colgroup>
                 <col style="width:40%"><col style="width:20%"><col style="width:20%"><col style="width:20%">
             </colgroup>
@@ -904,22 +1110,28 @@ $nextClassCode = \App\Models\StudentPromotion::nextClassCode($classCode);
                     @endforeach
                 </tr>
                 <tr>
-                    <td class="lbl">Moyenne sur 10</td>
+                    <td class="lbl">Moyenne sur {{ $moyenneMax }}</td>
                     @foreach(['T1','T2','T3'] as $_p)
                     <td class="big">{{ $periodTotals[$_p]['moyenne'] !== null ? number_format($periodTotals[$_p]['moyenne'], 2) : '' }}</td>
                     @endforeach
                 </tr>
                 <tr>
-                    <td class="lbl">Moyenne de la classe sur 10</td>
+                    <td class="lbl">Moyenne de la classe sur {{ $moyenneClsMax }}</td>
                     @foreach(['T1','T2','T3'] as $_p)
                     <td class="big">{{ $periodTotals[$_p]['class_moyenne'] !== null ? number_format($periodTotals[$_p]['class_moyenne'], 2) : '' }}</td>
+                    @endforeach
+                </tr>
+                <tr>
+                    <td class="lbl">DIM. PERS. (Discipline)</td>
+                    @foreach(['T1','T2','T3'] as $_p)
+                    <td class="big">{{ $periodTotals[$_p]['discipline_status'] ?? '' }}</td>
                     @endforeach
                 </tr>
             </tbody>
         </table>
 
-        {{-- LÉGENDE --}}
-        <table class="bk-leg">
+        {{-- LÉGENDE — anchored at the bottom of the panel, never clipped --}}
+        <table class="bk-leg" style="flex-shrink:0;">
             <thead>
                 <tr>
                     <th class="lh" style="width:30%;">Degré de maîtrise de la compétence de base.</th>
