@@ -7,18 +7,24 @@ use App\Models\Classroom;
 use Maatwebsite\Excel\Concerns\WithMultipleSheets;
 
 /**
- * Multi-sheet export for direction/admin.
+ * GradeSheetDirectorExport
  *
- * Produces one sheet per teacher assigned to the classroom (using that
- * teacher's subjects only), plus a final sheet with every subject for the
- * level — all using the same GradeSheetExport format that mirrors the real
- * "Extraction CPB" template:
+ * Multi-sheet export for direction / admin users.
  *
- *   Row 1  → CARNET INTEC PRIMAIRE - CLASSE {label} - {year}
- *   Row 2  → PÉRIODE N (Trimestre N)
- *   Row 3  → Subject names (merged per subject group)
- *   Row 4  → Competence labels  (Matricule / Nom Complet / Date Naissance / CB1 / …)
- *   Row 5+ → Student data
+ * Produces one sheet per teacher assigned to the classroom (filtered to
+ * that teacher's subjects only), plus a final "all subjects" sheet — every
+ * sheet uses the same GradeSheetExport layout so directors can review per
+ * teacher OR see the full picture.
+ *
+ * Same shape as the single-teacher export:
+ *   Row 1 — Title banner
+ *   Row 2 — Period label
+ *   Row 3 — Subject group headers + TOTAUX/MOYENNES + DIM. PERS. + OBSERVATIONS
+ *   Row 4 — Per-competence headers + summary labels
+ *   Row 5+ — Student data
+ *
+ * NO computation, NO conversion — every value comes verbatim from the
+ * bulletins / bulletin_grades tables, matching what was entered in saisie.
  */
 class GradeSheetDirectorExport implements WithMultipleSheets
 {
@@ -33,9 +39,14 @@ class GradeSheetDirectorExport implements WithMultipleSheets
     {
         $classroom = Classroom::with('teachers')->findOrFail($this->classroomId);
         $sheets    = [];
+        $seen      = [];
 
-        // One sheet per assigned teacher (their subjects only)
+        // One sheet per assigned teacher (their subjects only).
+        // Deduplicate in case the same teacher is attached twice.
         foreach ($classroom->teachers as $teacher) {
+            if (isset($seen[$teacher->id])) continue;
+            $seen[$teacher->id] = true;
+
             $sheets[] = new GradeSheetExport(
                 $this->classroomId,
                 $this->period,
@@ -45,7 +56,7 @@ class GradeSheetDirectorExport implements WithMultipleSheets
             );
         }
 
-        // Final sheet: all subjects, no teacher filter
+        // Final "Toutes matières" sheet: all subjects, no teacher filter.
         $sheets[] = new GradeSheetExport(
             $this->classroomId,
             $this->period,
@@ -63,6 +74,6 @@ class GradeSheetDirectorExport implements WithMultipleSheets
         $periodLabel = PeriodEnum::from($this->period)->label();
         $label       = preg_replace('/[^A-Za-z0-9_\-]/', '_', $classroom?->label ?? 'classe');
 
-        return "notes_direction_{$label}_{$periodLabel}_" . now()->format('Y-m-d') . '.xlsx';
+        return "notes_direction_{$label}_{$periodLabel}_" . now()->format('Y-m-d_H-i-s') . '.xlsx';
     }
 }

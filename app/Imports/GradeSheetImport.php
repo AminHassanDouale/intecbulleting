@@ -16,16 +16,29 @@ use Maatwebsite\Excel\Concerns\ToArray;
 use Maatwebsite\Excel\Concerns\WithStartRow;
 
 /**
- * GradeSheetImport — section-aware, level-aware manual summary detection.
+ * GradeSheetImport
  *
- * Grade score bounds are NOT validated here — values are stored as-is.
- * Only summary fields (total, moyenne, moyenne_classe) are range-checked
- * against their niveau-specific maximum to prevent DB decimal overflow.
+ * Round-trip safe importer paired with GradeSheetExport.
  *
- * Column order (matches GradeSheetExport for all levels):
- *   CP      → Total sur 140 | Moyenne sur 10  | Moyenne de la classe sur 10
- *   CE1/2   → Total sur 200 | Moyenne sur 20  | Moyenne de la classe sur 20
- *   CM1/2   → Total sur 200 | Moyenne sur 20  | Moyenne de la classe sur 20
+ * Philosophy: NO computation. Whatever value is in a cell is stored as-is,
+ * subject only to a niveau-aware range check on the three summary fields
+ * (total, moyenne, moyenne_classe) to prevent DB overflow. Grade scores
+ * themselves are NEVER bounded — they are stored exactly as entered.
+ *
+ * Header detection is permissive — many label variants are accepted:
+ *   "Total sur 200", "Total /200", "Total" → totalCol
+ *   "Moyenne sur 20", "Moyenne /20", "Moy 20", "Moy./20" → moy10Col
+ *   "Moyenne de la classe sur 20", "Moy. classe /20", "Moy classe" → moyClasseCol
+ *   "DISCIPLINE", row3 cell "DIM. PERS." → disciplineCol
+ *   "Commentaire", "Observations", row3 cell "OBSERVATIONS" → observationsCol
+ *
+ * Empty cells in detected summary columns store NULL — this lets a teacher
+ * blank a value via Excel and have the carnet reflect it.
+ *
+ * Column order produced by the export (the importer accepts any order):
+ *   Matricule | Nom Complet | Date Naissance | <competences…>
+ *   | Total sur N | Moyenne sur M | Moyenne de la classe sur M
+ *   | DISCIPLINE | Commentaire
  */
 class GradeSheetImport implements ToArray, WithStartRow
 {
@@ -60,7 +73,7 @@ class GradeSheetImport implements ToArray, WithStartRow
 
     public function startRow(): int { return 1; }
 
-    // ── Subject loading (mirrors export) ─────────────────────────────────────
+    // ── Subject loading (mirrors export / saisie) ────────────────────────────
 
     private function loadSubjectsAndCompetences(): void
     {
@@ -113,18 +126,14 @@ class GradeSheetImport implements ToArray, WithStartRow
         return strtolower(trim($subjectName)) . '::' . strtolower(trim($competenceCode));
     }
 
-    /**
-     * Niveau prefix detection — mirrors GradeSheetExport::resolveNiveauKey().
-     * Handles section codes like CPA, CPB, CE1A, CE2B, CM1A, CM2A.
-     */
     private function resolvedNiveauKey(): ?string
     {
         return GradeSheetExport::resolveNiveauKey($this->niveauCode);
     }
 
     /**
-     * Returns the summary column max values for range-checking summary fields only.
-     * Grade scores themselves are NOT bounded here.
+     * Niveau-aware bounds for the three summary fields (NOT for grades).
+     * Generous fallback for unknown niveaux to avoid false rejections.
      */
     private function summaryBounds(): array
     {
@@ -136,7 +145,6 @@ class GradeSheetImport implements ToArray, WithStartRow
         if (in_array($key, ['CE1', 'CE2', 'CM1', 'CM2'], true)) {
             return ['total_max' => 200, 'moy_max' => 20, 'moy_cls_max' => 20];
         }
-        // Unknown niveau — use generous bounds to avoid false rejections
         return ['total_max' => 9999, 'moy_max' => 9999, 'moy_cls_max' => 9999];
     }
 
@@ -144,6 +152,7 @@ class GradeSheetImport implements ToArray, WithStartRow
 
     public function array(array $allRows): void
     {
+        // Find the header row (the one starting with "Matricule")
         $codeRowIndex    = null;
         $subjectRowIndex = null;
 
@@ -216,16 +225,20 @@ class GradeSheetImport implements ToArray, WithStartRow
 
     private function buildColumnMap(array $subjectRow, array $codeRow): void
     {
+        // Labels in row 3 that are NOT subject names (so they shouldn't
+        // propagate as a "current subject" rightward).
         $nonSubjectLabels = [
             'matricule', 'nom complet', 'nom', 'prénom', 'prenom',
             'date naissance', 'date de naissance',
             'totaux / moyennes', 'totaux/moyennes', 'totaux',
-            'dim. pers.', 'dim pers', 'dimension personnelle',
-            'observations', 'commentaire',
+            'dim. pers.', 'dim pers', 'dimension personnelle', 'dim. personnelle',
+            'observations', 'observation', 'commentaire', 'commentaires',
             '',
         ];
 
-        // Propagate subject names rightward across merged blank cells
+        // Propagate subject names rightward across merged blank cells in
+        // the subject row (row 3). Many spreadsheets read merged cells as
+        // a value in the first cell only and blanks afterward.
         $currentSubject = null;
         $subjectForCol  = [];
 
@@ -234,6 +247,9 @@ class GradeSheetImport implements ToArray, WithStartRow
             $lower   = strtolower($trimmed);
 
             if ($trimmed !== '' && !in_array($lower, $nonSubjectLabels, true)) {
+                // Strip a trailing "/N" from the subject name (we add it on export
+                // for visual reference, but the canonical subject name is stored
+                // without it in the DB).
                 $cleaned        = preg_replace('#\s*/\s*\d+\s*$#u', '', $trimmed);
                 $currentSubject = trim($cleaned);
             } elseif ($trimmed !== '' && in_array($lower, $nonSubjectLabels, true)) {
@@ -257,47 +273,57 @@ class GradeSheetImport implements ToArray, WithStartRow
             $subjectFor    = $subjectForCol[$col] ?? null;
 
             // ── Manual summary column detection ────────────────────────────
-            // ORDER MATTERS: "Moyenne de la classe" MUST be checked before
-            // the generic "Moyenne" check, and "Total" last of the three.
+            // ORDER MATTERS: "Moyenne de la classe" MUST be checked BEFORE
+            // generic "Moyenne", and total last of the three. Patterns are
+            // permissive — they accept "sur N", "/N", trailing punctuation, etc.
 
-            // 1) "Moyenne de la classe sur XX"
-            if (str_contains($lowerLabel, 'moyenne de la classe')
+            // 1) MOYENNE DE LA CLASSE
+            if (preg_match('/moyenne\s+de\s+la\s+classe/i', $rawLabel)
+                || preg_match('/moy(?:enne)?\.?\s+(?:de\s+la\s+)?classe/i', $rawLabel)
                 || str_contains($lowerLabel, 'moyenne classe')
-                || str_contains($lowerLabel, 'moy. classe')
-                || str_contains($lowerLabel, 'moy classe')) {
+                || str_contains($lowerLabel, 'moy classe')
+                || str_contains($lowerLabel, 'moy. classe')) {
                 $this->moyClasseCol = $col;
                 continue;
             }
 
-            // 2) "Moyenne sur XX" (without "classe")
-            if (preg_match('/^moyenne\s+sur\s+\d+/i', $rawLabel)
-                || preg_match('/^moy\.?\s+sur\s+\d+/i', $rawLabel)
-                || ($lowerLabel === 'moyenne sur 10')
-                || ($lowerLabel === 'moyenne sur 20')) {
+            // 2) MOYENNE (without "classe")
+            // Matches: "Moyenne sur 20", "Moyenne /20", "Moy./20", "Moyenne 10", "Moy 20"
+            if (preg_match('/^moy(?:enne)?\.?\s*(?:sur\s+|\/\s*)?\d*\s*$/i', $rawLabel)
+                || preg_match('/^moyenne\s+sur\s+\d+/i', $rawLabel)
+                || preg_match('/^moy\.?\s*\/\s*\d+/i', $rawLabel)
+                || $lowerLabel === 'moyenne'
+                || $lowerLabel === 'moy.'
+                || $lowerLabel === 'moy') {
                 $this->moy10Col = $col;
                 continue;
             }
 
-            // 3) "Total sur XX"
-            if (preg_match('/^total\s+sur\s+\d+/i', $rawLabel)
+            // 3) TOTAL
+            // Matches: "Total sur 200", "Total /200", "Total"
+            if (preg_match('/^total\s*(?:sur\s+|\/\s*)?\d*\s*$/i', $rawLabel)
                 || str_contains($lowerLabel, 'total sur')
-                || $lowerLabel === 'total') {
+                || str_contains($lowerLabel, 'total /')
+                || $lowerLabel === 'total'
+                || $lowerLabel === 'totaux') {
                 $this->totalCol = $col;
                 continue;
             }
 
-            // 4) DISCIPLINE
+            // 4) DISCIPLINE / DIM. PERS.
             if (str_contains($lowerLabel, 'discipline')
                 || str_contains($subjectRowVal, 'dim. pers.')
-                || str_contains($subjectRowVal, 'dim pers')) {
+                || str_contains($subjectRowVal, 'dim pers')
+                || str_contains($subjectRowVal, 'dimension personnelle')) {
                 $this->disciplineCol = $col;
                 continue;
             }
 
-            // 5) OBSERVATIONS / Commentaire
+            // 5) OBSERVATIONS / COMMENTAIRE
             if (str_contains($subjectRowVal, 'observation')
                 || str_contains($subjectRowVal, 'commentaire')
                 || str_contains($lowerLabel, 'observations')
+                || str_contains($lowerLabel, 'observation')
                 || str_contains($lowerLabel, 'commentaire')) {
                 $this->observationsCol = $col;
                 continue;
@@ -306,6 +332,8 @@ class GradeSheetImport implements ToArray, WithStartRow
             // ── Competence mapping ─────────────────────────────────────────
             if ($rawLabel === '' || $subjectFor === null) continue;
 
+            // The export writes labels like "CB1 / Description /20".
+            // The canonical code is everything before the first " / ".
             $code = $rawLabel;
             if (str_contains($rawLabel, '/')) {
                 $code = trim(explode('/', $rawLabel)[0]);
@@ -358,6 +386,8 @@ class GradeSheetImport implements ToArray, WithStartRow
 
             // ── Competence grades ───────────────────────────────────────────
             // No max_score bounds check — store exactly what was entered.
+            // Empty cells skip (keeping any existing value); non-empty cells
+            // overwrite via updateOrCreate.
             foreach ($this->columnMap as $colIndex => $compositeKey) {
                 $rawValue = $row[$colIndex] ?? null;
                 $trimmed  = trim((string) $rawValue);
@@ -369,14 +399,26 @@ class GradeSheetImport implements ToArray, WithStartRow
                 if ($competence->subject->scale_type === 'competence') {
                     $this->saveCompetenceStatus($bulletin, $competence, $rawValue);
                 } else {
-                    $this->saveNumericScore($bulletin, $competence, $rawValue);
+                    // Numeric subjects accept either a number OR an A/EVA/NA
+                    // status (some teachers use status for special cases).
+                    $upperTrimmed = strtoupper($trimmed);
+                    if (in_array($upperTrimmed, ['A', 'EVA', 'NA'], true)) {
+                        $this->saveCompetenceStatus($bulletin, $competence, $upperTrimmed);
+                    } else {
+                        $this->saveNumericScore($bulletin, $competence, $rawValue);
+                    }
                 }
                 $gradesProcessed++;
             }
 
             // ── Manual summary fields ───────────────────────────────────────
-            // Only range-check total/moyenne/moyenne_classe to prevent decimal
-            // column overflow; grade scores are accepted as entered above.
+            // KEY DECISION: when a summary column IS detected in the file,
+            // the cell's value (including blank) is written to the DB.
+            // This lets a teacher clear a value via Excel by emptying its cell.
+            //
+            // When a summary column is NOT detected (e.g. teacher's export
+            // doesn't include those columns), the existing DB value is left
+            // untouched — no $updates entry is added for that field.
             $bounds  = $this->summaryBounds();
             $updates = [];
 
@@ -414,7 +456,8 @@ class GradeSheetImport implements ToArray, WithStartRow
             if ($this->observationsCol !== null) {
                 $val   = trim((string) ($row[$this->observationsCol] ?? ''));
                 $lower = strtolower($val);
-                $updates['teacher_comment'] = ($val !== '' && !in_array($lower, ['observations', 'commentaire'], true))
+                // Guard against accidentally importing the header label as a value.
+                $updates['teacher_comment'] = ($val !== '' && !in_array($lower, ['observations', 'commentaire', 'observation'], true))
                     ? $val
                     : null;
             }
@@ -441,6 +484,9 @@ class GradeSheetImport implements ToArray, WithStartRow
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
+    /**
+     * Parse "12,5" / "12.5" / " 12  " / " " / null into a float or null.
+     */
     private function parseNumeric(mixed $raw): ?float
     {
         if ($raw === null) return null;

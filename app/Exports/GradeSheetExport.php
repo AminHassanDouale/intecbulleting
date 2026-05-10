@@ -19,6 +19,32 @@ use PhpOffice\PhpSpreadsheet\Style\Border;
 use PhpOffice\PhpSpreadsheet\Style\Fill;
 use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
 
+/**
+ * GradeSheetExport
+ *
+ * Round-trip safe Excel export for the saisie / carnet workflow.
+ *
+ * Philosophy: NO computation, NO conversion. Whatever was entered in
+ * saisie (or imported from a previous Excel round-trip) appears verbatim
+ * in the exported sheet. The carnet, the saisie screen, and this export
+ * all read the same database columns and show the same values.
+ *
+ * Layout (rows are 1-indexed):
+ *   Row 1 — Title banner ("CARNET INTEC PRIMAIRE - CLASSE … - {year}")
+ *   Row 2 — Period label
+ *   Row 3 — Subject group headers (merged across each subject's competences)
+ *           + "TOTAUX / MOYENNES" (merged across 3 summary cols)
+ *           + "DIM. PERS." + "OBSERVATIONS"
+ *   Row 4 — Per-competence headers + summary labels:
+ *             Matricule | Nom Complet | Date Naissance | <competences…>
+ *             | Total sur N | Moyenne sur M | Moyenne de la classe sur M
+ *             | DISCIPLINE | Commentaire
+ *   Row 5+ — One row per student
+ *
+ * Summary scale by niveau (CP/CE1/CE2/CM1/CM2):
+ *   CP            → Total sur 140 | Moyenne sur 10 | Moyenne classe sur 10
+ *   CE1/CE2/CM1/CM2 → Total sur 200 | Moyenne sur 20 | Moyenne classe sur 20
+ */
 class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWidths
 {
     private Collection $subjects;
@@ -42,18 +68,12 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
 
     // ── Niveau key resolver ───────────────────────────────────────────────────
     //
-    //  Returns the base level key (CP, CE1, CE2, CM1, CM2) by searching for
-    //  it anywhere inside the normalised code, with longest/most-specific
-    //  prefixes checked first so e.g. CM2 wins over CM1, CE2 over CE1.
+    //  Returns the base level key (CP, CE1, CE2, CM1, CM2). Order matters —
+    //  longer/more-specific keys are checked first so CM2 isn't read as CM1
+    //  and CE2 isn't read as CE1.
     //
-    //  Handles all of:
-    //      "CP", "CPA", "CPB"
-    //      "CE1", "CE1A", "CE1B", "CE1-A", "CE1 A"
-    //      "CE2", "CE2A", "CE2B"
-    //      "CM1", "CM1A"
-    //      "CM2", "CM2A"
-    //  And prefixed variants used in some installs:
-    //      "PRIMAIRE-CE1A", "INTEC-CE1", "primaire_ce2a", etc.
+    //  Handles: CP, CPA, CPB, CE1, CE1A, CE1-A, CE2A, CM1, CM1A, CM2, CM2A,
+    //  and prefixed variants (PRIMAIRE-CE1A, INTEC-CE1, …).
 
     public static function resolveNiveauKey(string $niveauCode): ?string
     {
@@ -61,46 +81,26 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
     }
 
     /**
-     * Try each candidate string in turn and return the first prefix match.
-     * Used so we can fall back from the niveau code (which can be anything in
-     * the DB) to the classroom's own section code, which is reliable.
-     *
      * @param array<int, string|null> $candidates
      */
     public static function resolveNiveauKeyFromCandidates(array $candidates): ?string
     {
-        // Order matters: longer/more-specific keys first so CM2 isn't read
-        // as CM1, and CE2 isn't read as CE1.
         $prefixes = ['CM2', 'CM1', 'CE2', 'CE1', 'CP'];
 
         foreach ($candidates as $candidate) {
-            if ($candidate === null) {
-                continue;
-            }
+            if ($candidate === null) continue;
             $upper = preg_replace('/[^A-Z0-9]/', '', strtoupper(trim((string) $candidate)));
-            if ($upper === '') {
-                continue;
-            }
+            if ($upper === '') continue;
             foreach ($prefixes as $prefix) {
                 if (str_contains($upper, $prefix)) {
                     return $prefix;
                 }
             }
         }
-
         return null;
     }
 
     // ── Layout configuration ──────────────────────────────────────────────────
-    //
-    //  Column order is IDENTICAL for all levels:
-    //      [Total sur X]   [Moyenne sur Y]   [Moyenne de la classe sur Y]
-    //
-    //  CP  (A or B) → Total sur 140 | Moyenne sur 10  | Moyenne de la classe sur 10
-    //  CE1 (A or B) → Total sur 200 | Moyenne sur 20  | Moyenne de la classe sur 20
-    //  CE2 (A or B) → Total sur 200 | Moyenne sur 20  | Moyenne de la classe sur 20
-    //  CM1 A        → Total sur 200 | Moyenne sur 20  | Moyenne de la classe sur 20
-    //  CM2 A        → Total sur 200 | Moyenne sur 20  | Moyenne de la classe sur 20
 
     private function buildSummaryLayout(array $candidates): array
     {
@@ -118,8 +118,7 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
             ];
         }
 
-        $ceAndCmLevels = ['CE1', 'CE2', 'CM1', 'CM2'];
-        if ($key !== null && in_array($key, $ceAndCmLevels, true)) {
+        if ($key !== null && in_array($key, ['CE1', 'CE2', 'CM1', 'CM2'], true)) {
             return [
                 'columns' => [
                     ['key' => 'total_manuel',  'label' => 'Total sur 200',               'max' => 200],
@@ -131,7 +130,7 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
             ];
         }
 
-        // Fallback — unknown niveau. Label updated after score computation.
+        // Fallback for unknown niveaux. Total label patched after subject load.
         return [
             'columns' => [
                 ['key' => 'total_manuel',  'label' => 'Total sur ?',                  'max' => 0],
@@ -143,7 +142,7 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
         ];
     }
 
-    // ── Subject / competence loading ──────────────────────────────────────────
+    // ── Subject / competence loading (mirrors saisie) ─────────────────────────
 
     private function loadSubjectsAndCompetences(): void
     {
@@ -151,9 +150,6 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
         $sectionCode = (string) $classroom->code;
         $levelCode   = preg_replace('/[AB]$/', '', $sectionCode) ?: $sectionCode;
 
-        // Resolve summary layout from any reliable signal — the niveau code
-        // can be unpredictable in some installs, but the classroom's own
-        // code/label is always trustworthy. First candidate to match wins.
         $this->summaryLayout = $this->buildSummaryLayout([
             $this->niveauCode,
             $sectionCode,
@@ -195,9 +191,7 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
         $colIndex = 4;
         foreach ($this->subjects as $subject) {
             $count = $subject->competences->count();
-            if ($count === 0) {
-                continue;
-            }
+            if ($count === 0) continue;
 
             $this->subjectMap[] = [
                 'subject'          => $subject,
@@ -222,9 +216,7 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
 
         $this->summaryStartCol = $colIndex;
 
-        // Patch fallback total label once we know the actual computed sum.
-        // Only the total label uses computed sum; moyenne labels keep their
-        // niveau-default of /20 (set in buildSummaryLayout fallback).
+        // Patch the unknown-niveau total label with the computed sum.
         if ($this->summaryLayout['matched_key'] === null) {
             foreach ($this->summaryLayout['columns'] as $i => $col) {
                 if ($col['key'] === 'total_manuel') {
@@ -235,22 +227,16 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
         }
 
         Log::info('GradeSheetExport: loaded', [
-            'classroom_id'       => $this->classroomId,
-            'section_code'       => $sectionCode,
-            'level_code'         => $levelCode,
-            'classroom_label'    => $classroom->label ?? null,
-            'niveau'             => $this->niveauCode,
-            'resolution_inputs'  => [
-                'niveau'    => $this->niveauCode,
-                'section'   => $sectionCode,
-                'label'     => $classroom->label ?? null,
-                'level'     => $levelCode,
-            ],
-            'matched_key'        => $this->summaryLayout['matched_key'],
-            'subjects_count'     => $this->subjects->count(),
-            'teacher_id'         => $this->teacherId,
-            'totalMaxScore'      => $this->totalMaxScore,
-            'summary_labels'     => array_column($this->summaryLayout['columns'], 'label'),
+            'classroom_id'    => $this->classroomId,
+            'section_code'    => $sectionCode,
+            'level_code'      => $levelCode,
+            'classroom_label' => $classroom->label ?? null,
+            'niveau'          => $this->niveauCode,
+            'matched_key'     => $this->summaryLayout['matched_key'],
+            'subjects_count'  => $this->subjects->count(),
+            'teacher_id'      => $this->teacherId,
+            'totalMaxScore'   => $this->totalMaxScore,
+            'summary_labels'  => array_column($this->summaryLayout['columns'], 'label'),
         ]);
     }
 
@@ -281,7 +267,20 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
         return $this->summaryCol($this->summaryCount() + 1);
     }
 
-    // ── Array rows ────────────────────────────────────────────────────────────
+    /**
+     * Format a numeric grade for export. Rounds to 2 decimals, strips
+     * trailing zeros so 14.00 becomes "14" and 13.50 becomes "13.5".
+     * This makes round-trip imports stable.
+     */
+    private function formatScore(float $score): string
+    {
+        $formatted = number_format($score, 2, '.', '');
+        // Trim trailing zeros and the dot when integer.
+        $formatted = rtrim(rtrim($formatted, '0'), '.');
+        return $formatted === '' ? '0' : $formatted;
+    }
+
+    // ── Array rows (the actual grid) ──────────────────────────────────────────
 
     public function array(): array
     {
@@ -383,8 +382,13 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
                     : '',
             ];
 
-            // Grade cells — output exactly what is stored, no validation
+            // ── Grade cells ───────────────────────────────────────────────────
+            // Output exactly what is stored. Prefer numeric score when both
+            // are set (numeric is more specific). For competence-scale subjects
+            // (scale_type='competence'), only the status (A/EVA/NA) is meaningful.
             foreach ($this->subjects as $subject) {
+                $isCompetenceScale = $subject->scale_type === 'competence';
+
                 foreach ($subject->competences as $competence) {
                     $cell  = '';
                     $grade = $bulletin?->grades
@@ -393,22 +397,35 @@ class GradeSheetExport implements FromArray, WithStyles, WithTitle, WithColumnWi
                         ->first();
 
                     if ($grade !== null) {
-                        if ($grade->competence_status) {
-                            $cell = $grade->competence_status->value;
-                        } elseif ($grade->score !== null) {
-                            $cell = number_format((float) $grade->score, 1);
+                        if ($isCompetenceScale) {
+                            // Pure competence-based scale: only status matters
+                            $cell = $grade->competence_status?->value ?? '';
+                        } else {
+                            // Numeric subject: prefer numeric score, fall back to status
+                            if ($grade->score !== null) {
+                                $cell = $this->formatScore((float) $grade->score);
+                            } elseif ($grade->competence_status !== null) {
+                                $cell = $grade->competence_status->value;
+                            }
                         }
                     }
                     $row[] = $cell;
                 }
             }
 
-            // Summary columns — output exactly what is stored in the bulletin
+            // ── Summary columns (manual entry — no calculation) ──────────────
             foreach ($this->summaryLayout['columns'] as $col) {
                 $value = $bulletin?->{$col['key']};
-                $row[] = ($value !== null && $value !== '') ? (string) $value : '';
+                if ($value === null || $value === '') {
+                    $row[] = '';
+                } elseif (is_numeric($value)) {
+                    $row[] = $this->formatScore((float) $value);
+                } else {
+                    $row[] = (string) $value;
+                }
             }
 
+            // ── DISCIPLINE + OBSERVATIONS ────────────────────────────────────
             $row[] = (string) ($bulletin?->discipline_status ?? '');
             $row[] = (string) ($bulletin?->teacher_comment   ?? '');
 
