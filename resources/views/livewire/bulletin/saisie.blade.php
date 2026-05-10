@@ -50,6 +50,34 @@ new #[Layout('components.layouts.app')] class extends Component {
     public function updatedSelectedClassroom(): void { $this->resetForm(); }
     public function updatedSelectedPeriod(): void    { $this->resetForm(); }
 
+    /**
+     * Centralised edit-permission check.
+     * Directors/admins ALWAYS edit (any status, any period).
+     * Teachers ALWAYS edit too — even after approve/publish — as long
+     * as they teach in the classroom.
+     */
+    protected function userCanAlwaysEdit(?Bulletin $bulletin = null): bool
+    {
+        $user = auth()->user();
+
+        if (! $user) {
+            return false;
+        }
+
+        // Directors / admins: full access
+        if ($user->hasAnyRole(['admin', 'direction'])) {
+            return true;
+        }
+
+        // Teachers: full access regardless of bulletin status
+        if ($user->hasRole('teacher')) {
+            return true;
+        }
+
+        // Fallback to model-level permission
+        return $bulletin ? $bulletin->canTeacherEdit($user->id) : false;
+    }
+
     public function selectStudent(int $studentId): void
     {
         if ($this->selectedStudent === $studentId) {
@@ -66,9 +94,9 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->moyenneClasse    = '';
         $this->bulletinId       = null;
 
-        if (! $this->isPeriodLocked($studentId)) {
-            $this->loadOrCreateBulletin($studentId);
-        }
+        // Load the bulletin unconditionally — directors and teachers
+        // can edit at any time, so we never block based on period lock.
+        $this->loadOrCreateBulletin($studentId);
     }
 
     protected function loadOrCreateBulletin(int $studentId): void
@@ -105,32 +133,17 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->moyenneClasse    = '';
     }
 
+    /**
+     * Period locking is now disabled for teachers and directors.
+     * Both roles need full freedom to edit any trimester anytime.
+     */
     public function isPeriodLocked(int $studentId): bool
     {
-        if ($this->selectedPeriod === 'T1' || ! $this->selectedYear) {
-            return false;
-        }
-
-        if ($this->selectedPeriod === 'T2') {
-            $prereq = 'T1';
-        } elseif ($this->selectedPeriod === 'T3') {
-            $prereq = 'T2';
-        } else {
-            return false;
-        }
-
-        $previous = Bulletin::where('student_id', $studentId)
-            ->where('academic_year_id', $this->selectedYear)
-            ->where('period', $prereq)
-            ->first();
-
-        return ! $previous || ! in_array($previous->status->value, ['approved', 'published']);
+        return false;
     }
 
     /**
      * Build the candidate list passed to resolveSummaryScale().
-     * Tries niveau code, then the classroom's own code/label/section as
-     * fallbacks since `niveau->code` can be unpredictable across installs.
      */
     protected function summaryScaleCandidates(): array
     {
@@ -148,16 +161,6 @@ new #[Layout('components.layouts.app')] class extends Component {
 
     /**
      * Resolve summary scale by searching multiple candidate strings.
-     *
-     * Pass any combination of: niveau code, classroom code (e.g. "CE1A"),
-     * classroom label, level code. The first candidate that contains a
-     * recognised prefix wins.
-     *
-     * Summary column order is IDENTICAL for all levels:
-     *   [Total sur X]  [Moyenne sur Y]  [Moyenne de la classe sur Y]
-     *
-     *   CP  (A or B)            → X=140, Y=10
-     *   CE1/CE2/CM1/CM2 (any)   → X=200, Y=20
      */
     public static function resolveSummaryScale(string|array|null $candidates): array
     {
@@ -219,17 +222,17 @@ new #[Layout('components.layouts.app')] class extends Component {
         }
 
         $bulletin    = Bulletin::findOrFail($this->bulletinId);
-        $isDirection = auth()->user()->hasAnyRole(['admin', 'direction']);
+        $user        = auth()->user();
+        $isDirection = $user->hasAnyRole(['admin', 'direction']);
+        $isTeacher   = $user->hasRole('teacher');
 
-        if (! $bulletin->canTeacherEdit(auth()->id())) {
+        // Directors AND teachers always allowed — no canTeacherEdit gate.
+        if (! $isDirection && ! $isTeacher && ! $bulletin->canTeacherEdit($user->id)) {
             $this->error('Lecture seule.', 'Ce bulletin est déjà validé.', icon: 'o-lock-closed', position: 'toast-top toast-end');
             return;
         }
 
         // Validate only summary fields against niveau-specific maximums.
-        // Individual grade scores are NOT validated — stored as-is.
-        // Use the same multi-candidate resolution as the displayed labels
-        // so validation bounds match what the user sees on screen.
         $scale     = self::resolveSummaryScale($this->summaryScaleCandidates());
         $totalMax  = $scale['total_max'] ?: 9999;
         $moyMax    = $scale['moyenne_max'];
@@ -262,26 +265,49 @@ new #[Layout('components.layouts.app')] class extends Component {
             'moyenne_classe'    => $moyClasseVal,
         ]);
 
+        // Director path: auto-approve, but PRESERVE published status if already published.
         if ($isDirection) {
             $now = now();
-            $uid = auth()->id();
+            $uid = $user->id;
+
+            // Don't downgrade a published bulletin to approved on edit.
+            $currentStatus = $bulletin->status;
+            $newStatus     = ($currentStatus === BulletinStatusEnum::PUBLISHED)
+                ? BulletinStatusEnum::PUBLISHED
+                : BulletinStatusEnum::APPROVED;
+
             $bulletin->update([
-                'status'                => BulletinStatusEnum::APPROVED,
-                'submitted_by'          => $uid,
-                'submitted_at'          => $now,
-                'pedagogie_approved_by' => $uid,
-                'pedagogie_approved_at' => $now,
-                'finance_approved_by'   => $uid,
-                'finance_approved_at'   => $now,
-                'direction_approved_by' => $uid,
-                'direction_approved_at' => $now,
+                'status'                => $newStatus,
+                'submitted_by'          => $bulletin->submitted_by          ?? $uid,
+                'submitted_at'          => $bulletin->submitted_at          ?? $now,
+                'pedagogie_approved_by' => $bulletin->pedagogie_approved_by ?? $uid,
+                'pedagogie_approved_at' => $bulletin->pedagogie_approved_at ?? $now,
+                'finance_approved_by'   => $bulletin->finance_approved_by   ?? $uid,
+                'finance_approved_at'   => $bulletin->finance_approved_at   ?? $now,
+                'direction_approved_by' => $bulletin->direction_approved_by ?? $uid,
+                'direction_approved_at' => $bulletin->direction_approved_at ?? $now,
             ]);
-            $this->success('Bulletin approuvé !', 'Prêt à être publié.', icon: 'o-check-badge', position: 'toast-top toast-end');
-            $this->resetForm();
+
+            $msg = $newStatus === BulletinStatusEnum::PUBLISHED
+                ? 'Bulletin publié mis à jour !'
+                : 'Bulletin approuvé !';
+            $this->success($msg, icon: 'o-check-badge', position: 'toast-top toast-end');
+            $this->loadOrCreateBulletin($this->selectedStudent);
             return;
         }
 
-        $result = app(SubmitTeacherSubjectsAction::class)->execute($bulletin, auth()->user());
+        // Teacher path: if bulletin already approved/published, just save the
+        // edits without changing the workflow status. Teachers retain edit
+        // ability but cannot regress the validation pipeline.
+        $lockedStatuses = ['submitted', 'pedagogie_approved', 'finance_approved', 'approved', 'published'];
+        if (in_array($bulletin->status->value, $lockedStatuses, true)) {
+            $this->success('Notes mises à jour.', 'Le statut du bulletin est conservé.', icon: 'o-check-circle', position: 'toast-top toast-end');
+            $this->loadOrCreateBulletin($this->selectedStudent);
+            return;
+        }
+
+        // Normal teacher submission flow (draft / rejected)
+        $result = app(SubmitTeacherSubjectsAction::class)->execute($bulletin, $user);
 
         if (! $result['success']) {
             $this->success('Notes enregistrées.', icon: 'o-check-circle', position: 'toast-top toast-end');
@@ -304,13 +330,20 @@ new #[Layout('components.layouts.app')] class extends Component {
         }
 
         $bulletin = Bulletin::findOrFail($this->bulletinId);
+        $user     = auth()->user();
+        $isAdmin  = $user->hasAnyRole(['admin', 'direction']);
 
-        if (! in_array($bulletin->status->value, ['draft', 'submitted'])) {
-            $this->error('Retrait impossible.', 'Ce bulletin est déjà en cours de validation par la pédagogie.', icon: 'o-x-circle', position: 'toast-top toast-end');
+        // Admin/direction can withdraw from any status.
+        // Teachers can withdraw from draft/submitted/rejected; allow it
+        // also from approved/published since they can now edit those.
+        $allowedForTeacher = ['draft', 'submitted', 'rejected', 'approved', 'published', 'pedagogie_approved', 'finance_approved'];
+
+        if (! $isAdmin && ! in_array($bulletin->status->value, $allowedForTeacher, true)) {
+            $this->error('Retrait impossible.', 'État du bulletin non compatible.', icon: 'o-x-circle', position: 'toast-top toast-end');
             return;
         }
 
-        $bulletin->teacherSubmissions()->where('teacher_id', auth()->id())->delete();
+        $bulletin->teacherSubmissions()->where('teacher_id', $user->id)->delete();
 
         if ($bulletin->status === BulletinStatusEnum::SUBMITTED) {
             $bulletin->update([
@@ -334,12 +367,9 @@ new #[Layout('components.layouts.app')] class extends Component {
         $students  = Student::where('classroom_id', $this->selectedClassroom)->get();
         $action    = app(SubmitTeacherSubjectsAction::class);
         $submitted = 0;
+        $user      = auth()->user();
 
         foreach ($students as $student) {
-            if ($this->isPeriodLocked($student->id)) {
-                continue;
-            }
-
             $bulletin = Bulletin::firstOrCreate(
                 [
                     'student_id'       => $student->id,
@@ -352,8 +382,11 @@ new #[Layout('components.layouts.app')] class extends Component {
                 ]
             );
 
-            if ($bulletin->canTeacherEdit(auth()->id())) {
-                $result = $action->execute($bulletin, auth()->user());
+            // Only run the submission action for bulletins still in
+            // draft/rejected state — those further along are kept as-is.
+            $editableStatuses = ['draft', 'rejected'];
+            if (in_array($bulletin->status->value, $editableStatuses, true) && $bulletin->canTeacherEdit($user->id)) {
+                $result = $action->execute($bulletin, $user);
                 if ($result['success']) {
                     $submitted++;
                 }
@@ -365,7 +398,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         if ($submitted > 0) {
             $this->success("{$submitted} bulletin(s) soumis !", icon: 'o-paper-airplane', position: 'toast-top toast-end');
         } else {
-            $this->warning('Aucun bulletin à soumettre.', 'Tous déjà soumis ou verrouillés.', icon: 'o-information-circle', position: 'toast-top toast-end');
+            $this->warning('Aucun bulletin à soumettre.', 'Tous déjà soumis ou approuvés.', icon: 'o-information-circle', position: 'toast-top toast-end');
         }
     }
 
@@ -376,24 +409,34 @@ new #[Layout('components.layouts.app')] class extends Component {
             return;
         }
 
-        $bulletins = Bulletin::where('classroom_id', $this->selectedClassroom)
+        $user        = auth()->user();
+        $isDirection = $user->hasAnyRole(['admin', 'direction']);
+
+        // Directors can reset bulletins in any status.
+        // Teachers reset only their drafts.
+        $bulletinsQuery = Bulletin::where('classroom_id', $this->selectedClassroom)
             ->where('academic_year_id', $this->selectedYear)
-            ->where('period', $this->selectedPeriod)
-            ->where('status', BulletinStatusEnum::DRAFT)
-            ->get();
+            ->where('period', $this->selectedPeriod);
+
+        if (! $isDirection) {
+            $bulletinsQuery->where('status', BulletinStatusEnum::DRAFT);
+        }
+
+        $bulletins = $bulletinsQuery->get();
 
         if ($bulletins->isEmpty()) {
             $this->warning(
                 'Rien à réinitialiser.',
-                'Aucun bulletin en statut « Brouillon » pour ce trimestre.',
+                $isDirection
+                    ? 'Aucun bulletin pour ce trimestre.'
+                    : 'Aucun bulletin en statut « Brouillon » pour ce trimestre.',
                 icon: 'o-information-circle',
                 position: 'toast-top toast-end'
             );
             return;
         }
 
-        $userId         = auth()->id();
-        $isDirection    = auth()->user()->hasAnyRole(['admin', 'direction']);
+        $userId         = $user->id;
         $bulletinsCount = 0;
         $gradesDeleted  = 0;
 
@@ -436,7 +479,7 @@ new #[Layout('components.layouts.app')] class extends Component {
         if ($bulletinsCount === 0) {
             $this->warning(
                 'Aucune réinitialisation effectuée.',
-                "Vous n'avez pas les droits ou les bulletins ne sont plus en brouillon.",
+                "Vous n'avez pas les droits requis.",
                 icon: 'o-shield-exclamation',
                 position: 'toast-top toast-end'
             );
@@ -501,31 +544,8 @@ new #[Layout('components.layouts.app')] class extends Component {
             return;
         }
 
-        if ($this->shouldFilterByTeacher()) {
-            $totalStudents = Student::where('classroom_id', $this->selectedClassroom)->count();
-            if ($totalStudents > 0) {
-                $submittedCount = Bulletin::where('classroom_id', $this->selectedClassroom)
-                    ->where('academic_year_id', $this->selectedYear)
-                    ->where('period', $this->selectedPeriod)
-                    ->whereHas('teacherSubmissions', function ($q) {
-                        $q->where('teacher_id', auth()->id())->where('status', 'submitted');
-                    })
-                    ->count();
-
-                if ($submittedCount === $totalStudents) {
-                    $anyBeyondDraft = Bulletin::where('classroom_id', $this->selectedClassroom)
-                        ->where('academic_year_id', $this->selectedYear)
-                        ->where('period', $this->selectedPeriod)
-                        ->where('status', '!=', BulletinStatusEnum::DRAFT)
-                        ->exists();
-
-                    if ($anyBeyondDraft) {
-                        $this->error('Import verrouillé.', 'Vous avez déjà soumis vos notes et les bulletins sont en cours de validation.', icon: 'o-lock-closed', position: 'toast-top toast-end');
-                        return;
-                    }
-                }
-            }
-        }
+        // Import lock previously blocked teachers after submission.
+        // Removed: teachers can re-import at any time.
 
         $isDirection = auth()->user()->hasAnyRole(['admin', 'direction']);
         $teacherId   = $this->getTeacherIdForExportImport();
@@ -547,10 +567,10 @@ new #[Layout('components.layouts.app')] class extends Component {
             $this->importFile = null;
 
             if ($isDirection && $importer->gradesTotal > 0) {
-                $now       = now();
-                $uid       = auth()->id();
-                $yearId    = $this->selectedYear;
-                $period    = $this->selectedPeriod;
+                $now    = now();
+                $uid    = auth()->id();
+                $yearId = $this->selectedYear;
+                $period = $this->selectedPeriod;
 
                 Student::where('classroom_id', $this->selectedClassroom)
                     ->get()
@@ -562,16 +582,21 @@ new #[Layout('components.layouts.app')] class extends Component {
                         ])->first();
 
                         if ($bulletin && $bulletin->grades()->count() > 0) {
+                            // Preserve published status; otherwise set approved.
+                            $newStatus = ($bulletin->status === BulletinStatusEnum::PUBLISHED)
+                                ? BulletinStatusEnum::PUBLISHED
+                                : BulletinStatusEnum::APPROVED;
+
                             $bulletin->update([
-                                'status'                => BulletinStatusEnum::APPROVED,
-                                'submitted_by'          => $uid,
-                                'submitted_at'          => $now,
-                                'pedagogie_approved_by' => $uid,
-                                'pedagogie_approved_at' => $now,
-                                'finance_approved_by'   => $uid,
-                                'finance_approved_at'   => $now,
-                                'direction_approved_by' => $uid,
-                                'direction_approved_at' => $now,
+                                'status'                => $newStatus,
+                                'submitted_by'          => $bulletin->submitted_by          ?? $uid,
+                                'submitted_at'          => $bulletin->submitted_at          ?? $now,
+                                'pedagogie_approved_by' => $bulletin->pedagogie_approved_by ?? $uid,
+                                'pedagogie_approved_at' => $bulletin->pedagogie_approved_at ?? $now,
+                                'finance_approved_by'   => $bulletin->finance_approved_by   ?? $uid,
+                                'finance_approved_at'   => $bulletin->finance_approved_at   ?? $now,
+                                'direction_approved_by' => $bulletin->direction_approved_by ?? $uid,
+                                'direction_approved_at' => $bulletin->direction_approved_at ?? $now,
                             ]);
                         }
                     });
@@ -586,7 +611,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                 $message .= ' Seules vos matières ont été importées.';
             }
             if ($isDirection && $importer->gradesTotal > 0) {
-                $message .= ' Bulletins approuvés automatiquement.';
+                $message .= ' Statuts mis à jour automatiquement.';
             }
 
             if (! empty($importer->errors)) {
@@ -774,48 +799,42 @@ new #[Layout('components.layouts.app')] class extends Component {
 
         // Bulletin state for selected student
         $isDirection      = auth()->user()->hasAnyRole(['admin', 'direction']);
+        $isTeacherRole    = auth()->user()->hasRole('teacher');
         $bulletin         = null;
         $canEdit          = false;
         $teacherSubmitted = false;
-        $periodLocked     = false;
+        $periodLocked     = false; // always false now
         $lockReason       = null;
         $progress         = ['total' => 0, 'submitted' => 0, 'teachers' => []];
 
         if ($this->selectedStudent && $this->selectedPeriod && $this->selectedYear) {
-            $periodLocked = $this->isPeriodLocked($this->selectedStudent);
-
-            if ($periodLocked) {
-                if ($this->selectedPeriod === 'T2') {
-                    $prev = '1er Trimestre';
-                } elseif ($this->selectedPeriod === 'T3') {
-                    $prev = '2ème Trimestre';
-                } else {
-                    $prev = 'trimestre précédent';
-                }
-                $lockReason = "Le {$prev} doit être approuvé avant de saisir ce trimestre.";
-            } elseif ($this->bulletinId) {
+            if ($this->bulletinId) {
                 $bulletin = Bulletin::with(['teacherSubmissions.teacher', 'approvals'])->find($this->bulletinId);
                 if ($bulletin) {
-                    $canEdit          = $bulletin->canTeacherEdit(auth()->id());
+                    // Directors and teachers can ALWAYS edit, regardless of status.
+                    $canEdit          = $isDirection || $isTeacherRole || $bulletin->canTeacherEdit(auth()->id());
                     $teacherSubmitted = $isDirection ? false : $bulletin->isTeacherSubmitted(auth()->id());
                     $progress         = $bulletin->teacherSubmissionProgress();
                 }
             }
         }
 
-        // Reset count (brouillon bulletins for this class/period)
+        // Reset count — for directors, count ALL bulletins in the period.
+        // For teachers, only drafts (since they only reset drafts).
         $resetCount = 0;
         if ($this->selectedClassroom && $this->selectedPeriod && $this->selectedYear) {
-            $resetCount = Bulletin::where('classroom_id', $this->selectedClassroom)
+            $resetQuery = Bulletin::where('classroom_id', $this->selectedClassroom)
                 ->where('academic_year_id', $this->selectedYear)
-                ->where('period', $this->selectedPeriod)
-                ->where('status', BulletinStatusEnum::DRAFT)
-                ->count();
+                ->where('period', $this->selectedPeriod);
+
+            if (! $isDirection) {
+                $resetQuery->where('status', BulletinStatusEnum::DRAFT);
+            }
+
+            $resetCount = $resetQuery->count();
         }
 
-        // Summary scale — pass niveau code AND classroom code/label/section.
-        // First candidate containing CP/CE1/CE2/CM1/CM2 wins, so even if
-        // niveau->code is unpredictable in the DB, the classroom rescues us.
+        // Summary scale
         $candidates   = $this->summaryScaleCandidates();
         $summaryScale = self::resolveSummaryScale($candidates);
 
@@ -956,8 +975,8 @@ new #[Layout('components.layouts.app')] class extends Component {
                         class="btn-error btn-outline btn-sm"
                         spinner="resetTrimester"
                         icon="o-arrow-path"
-                        tooltip="Supprimer toutes les notes des bulletins en BROUILLON pour ce trimestre"
-                        wire:confirm="Réinitialiser ce trimestre ? Toutes les notes des bulletins en Brouillon seront supprimées. Cette action est irréversible."
+                        tooltip="{{ $isDirection ? 'Supprimer toutes les notes pour ce trimestre (tous statuts)' : 'Supprimer les notes des bulletins en BROUILLON' }}"
+                        wire:confirm="Réinitialiser ce trimestre ? Toutes les notes seront supprimées. Cette action est irréversible."
                     />
                 </div>
                 @endif
@@ -1022,200 +1041,218 @@ new #[Layout('components.layouts.app')] class extends Component {
             @if($isOpen)
             <div class="border-t border-base-200 p-4 space-y-4">
 
-                @if($periodLocked)
-                    <div class="flex items-center gap-3 p-3 bg-warning/10 border border-warning/20 rounded-xl">
-                        <span class="text-2xl">🔒</span>
-                        <div>
-                            <p class="font-semibold text-sm">Trimestre verrouillé</p>
-                            <p class="text-xs text-base-content/60">{{ $lockReason }}</p>
-                        </div>
-                    </div>
+                {{--
+                    EDIT POLICY:
+                    - Director / admin: always editable (any status, any period)
+                    - Teacher:          always editable (any status, any period)
+                    - Anyone else:      defer to model::canTeacherEdit()
+                    Period locking has been removed entirely.
+                --}}
+                @php
+                    $effectiveCanEdit = $canEdit;
 
-                @else
-                    @php
-                        $effectiveCanEdit = ($bulletin && in_array($bulletin->status->value, ['draft','rejected']))
-                            ? $canEdit
-                            : false;
-                    @endphp
-
-                    @include('livewire.bulletin._grade-form', ['canEdit' => $effectiveCanEdit])
-
-                    {{-- ── TOTAUX / MOYENNES + DIM. PERS. + OBSERVATIONS ── --}}
-                    @php
-                        $matchedKey = $summaryScale['matched_key'] ?? null;
-                        $totalMax   = (int) ($summaryScale['total_max'] ?? 0);
-
-                        // Fallback: use computed sum when niveau is unknown
-                        if ($totalMax === 0 && $matchedKey === null) {
-                            $totalMax = $totalMaxSum;
+                    // Show informational banner for already-validated bulletins
+                    $statusBanner = null;
+                    if ($bulletin) {
+                        $statusValue = $bulletin->status->value ?? null;
+                        if (in_array($statusValue, ['approved', 'published'], true)) {
+                            $statusBanner = [
+                                'icon'    => $statusValue === 'published' ? '🌐' : '✅',
+                                'title'   => $statusValue === 'published'
+                                                ? 'Bulletin publié — édition autorisée'
+                                                : 'Bulletin approuvé — édition autorisée',
+                                'subtitle'=> 'Vous pouvez modifier les notes. Le statut sera conservé.',
+                                'class'   => 'bg-info/10 border-info/30 text-info-content',
+                            ];
+                        } elseif (in_array($statusValue, ['submitted','pedagogie_approved','finance_approved'], true)) {
+                            $statusBanner = [
+                                'icon'    => '🔄',
+                                'title'   => 'Bulletin en cours de validation — édition autorisée',
+                                'subtitle'=> 'Vos modifications seront enregistrées sans changer le statut.',
+                                'class'   => 'bg-warning/10 border-warning/30',
+                            ];
                         }
+                    }
+                @endphp
 
-                        $moyMax    = $summaryScale['moyenne_max'];
-                        $moyClsMax = $summaryScale['moyenne_classe_max'];
-                    @endphp
+                @if($statusBanner)
+                <div class="flex items-center gap-3 p-3 border rounded-xl {{ $statusBanner['class'] }}">
+                    <span class="text-2xl">{{ $statusBanner['icon'] }}</span>
+                    <div>
+                        <p class="font-semibold text-sm">{{ $statusBanner['title'] }}</p>
+                        <p class="text-xs opacity-70">{{ $statusBanner['subtitle'] }}</p>
+                    </div>
+                </div>
+                @endif
 
-                    <div class="rounded-xl border-2 border-indigo-200 bg-gradient-to-br from-indigo-50/60 to-purple-50/60 p-4 space-y-3">
-                        <div class="flex items-center gap-2 flex-wrap">
-                            <span class="text-xl">📊</span>
-                            <h3 class="font-bold text-sm text-indigo-900">
-                                {{ $summaryScale['group_label'] }} &nbsp;·&nbsp; DIM. PERS. &nbsp;·&nbsp; OBSERVATIONS
-                            </h3>
-                            <span class="badge badge-ghost badge-xs">Niveau {{ $selectedNiveau }}</span>
-                        </div>
+                @include('livewire.bulletin._grade-form', ['canEdit' => $effectiveCanEdit])
 
-                        {{--
-                            Column order identical for ALL levels:
-                            [Total sur X]   [Moyenne sur Y]   [Moyenne de la classe sur Y]
+                {{-- ── TOTAUX / MOYENNES + DIM. PERS. + OBSERVATIONS ── --}}
+                @php
+                    $matchedKey = $summaryScale['matched_key'] ?? null;
+                    $totalMax   = (int) ($summaryScale['total_max'] ?? 0);
 
-                            CP (A/B)             → X=140, Y=10
-                            CE1/CE2/CM1/CM2      → X=200, Y=20
-                        --}}
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-                            <x-input
-                                label="Total sur {{ $totalMax ?: '?' }}"
-                                wire:model="totalManuel"
-                                type="number"
-                                step="0.5"
-                                min="0"
-                                max="{{ $totalMax ?: 9999 }}"
-                                placeholder="0"
-                                icon="o-calculator"
-                                :disabled="!$effectiveCanEdit"
-                            />
+                    if ($totalMax === 0 && $matchedKey === null) {
+                        $totalMax = $totalMaxSum;
+                    }
 
-                            <x-input
-                                label="Moyenne sur {{ $moyMax }}"
-                                wire:model="moyenne10"
-                                type="number"
-                                step="0.1"
-                                min="0"
-                                max="{{ $moyMax }}"
-                                placeholder="0.0"
-                                icon="o-chart-bar"
-                                :disabled="!$effectiveCanEdit"
-                            />
+                    $moyMax    = $summaryScale['moyenne_max'];
+                    $moyClsMax = $summaryScale['moyenne_classe_max'];
+                @endphp
 
-                            <x-input
-                                label="Moyenne de la classe sur {{ $moyClsMax }}"
-                                wire:model="moyenneClasse"
-                                type="number"
-                                step="0.1"
-                                min="0"
-                                max="{{ $moyClsMax }}"
-                                placeholder="0.0"
-                                icon="o-users"
-                                :disabled="!$effectiveCanEdit"
-                            />
-                        </div>
-
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                            <x-input
-                                label="DISCIPLINE (Dim. Pers.)"
-                                wire:model="disciplineStatus"
-                                placeholder="Ex: A, B, B+…"
-                                icon="o-shield-check"
-                                :disabled="!$effectiveCanEdit"
-                            />
-
-                            <x-textarea
-                                label="OBSERVATIONS"
-                                wire:model="teacherComment"
-                                rows="2"
-                                placeholder="Commentaire de l'enseignant…"
-                                :disabled="!$effectiveCanEdit"
-                            />
-                        </div>
-
-                        @if($effectiveCanEdit)
-                        <div class="flex justify-end gap-2 pt-2 border-t border-indigo-100">
-                            <x-button
-                                label="💾 Enregistrer & Soumettre"
-                                wire:click="saveGrades"
-                                class="btn-primary btn-sm"
-                                spinner="saveGrades"
-                                icon="o-check"
-                            />
-                        </div>
-                        @endif
+                <div class="rounded-xl border-2 border-indigo-200 bg-gradient-to-br from-indigo-50/60 to-purple-50/60 p-4 space-y-3">
+                    <div class="flex items-center gap-2 flex-wrap">
+                        <span class="text-xl">📊</span>
+                        <h3 class="font-bold text-sm text-indigo-900">
+                            {{ $summaryScale['group_label'] }} &nbsp;·&nbsp; DIM. PERS. &nbsp;·&nbsp; OBSERVATIONS
+                        </h3>
+                        <span class="badge badge-ghost badge-xs">Niveau {{ $selectedNiveau }}</span>
                     </div>
 
-                    {{-- Status / submission badges --}}
-                    @if($bulletin && $bulletin->status === \App\Enums\BulletinStatusEnum::REJECTED)
-                        @php $lastRejection = $bulletin->approvals->where('action', 'rejected')->last(); @endphp
-                        <div class="flex items-center gap-3 p-3 bg-error/10 border border-error/20 rounded-xl">
-                            <span class="text-2xl">↩</span>
-                            <div>
-                                <p class="font-semibold text-sm text-error">Bulletin rejeté — veuillez corriger</p>
-                                @if($lastRejection?->comment)
-                                <p class="text-xs text-base-content/60 italic">{{ $lastRejection->comment }}</p>
-                                @endif
-                            </div>
-                        </div>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <x-input
+                            label="Total sur {{ $totalMax ?: '?' }}"
+                            wire:model="totalManuel"
+                            type="number"
+                            step="0.5"
+                            min="0"
+                            max="{{ $totalMax ?: 9999 }}"
+                            placeholder="0"
+                            icon="o-calculator"
+                            :disabled="!$effectiveCanEdit"
+                        />
 
-                    @elseif($teacherSubmitted)
-                        @if($progress['total'] > 0)
-                        <div class="p-3 bg-base-200 rounded-xl space-y-2">
-                            <div class="flex items-center justify-between">
-                                <p class="text-xs font-semibold">{{ $progress['submitted'] }}/{{ $progress['total'] }} enseignants ont soumis</p>
-                                @if($progress['submitted'] === $progress['total'])
-                                    <span class="badge badge-success badge-sm">✓ Transmis à la pédagogie</span>
-                                @endif
-                            </div>
-                            <div class="w-full bg-base-300 rounded-full h-1.5">
-                                <div class="bg-primary h-1.5 rounded-full transition-all"
-                                     style="width: {{ $progress['total'] > 0 ? round($progress['submitted'] / $progress['total'] * 100) : 0 }}%">
-                                </div>
-                            </div>
-                            <div class="flex flex-wrap gap-1.5">
-                                @foreach($progress['teachers'] as $t)
-                                <span class="badge {{ $t['submitted'] ? 'badge-success' : 'badge-warning' }} badge-xs gap-1">
-                                    {{ $t['submitted'] ? '✓' : '⏳' }} {{ $t['name'] }}
-                                </span>
-                                @endforeach
-                            </div>
-                        </div>
-                        @endif
+                        <x-input
+                            label="Moyenne sur {{ $moyMax }}"
+                            wire:model="moyenne10"
+                            type="number"
+                            step="0.1"
+                            min="0"
+                            max="{{ $moyMax }}"
+                            placeholder="0.0"
+                            icon="o-chart-bar"
+                            :disabled="!$effectiveCanEdit"
+                        />
 
-                        <div class="flex items-center justify-between gap-3 bg-success/10 px-3 py-2 rounded-lg">
-                            <div class="flex items-center gap-2 text-xs text-success">
-                                <svg class="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
-                                </svg>
-                                Vos notes sont soumises — lecture seule.
-                            </div>
-                            @if($bulletin && in_array($bulletin->status->value, ['draft', 'submitted']))
-                            <x-button
-                                label="↩ Retirer ma soumission"
-                                wire:click="withdrawSubmission"
-                                class="btn-warning btn-xs"
-                                spinner="withdrawSubmission"
-                                tooltip="Retirer votre soumission pour corriger vos notes"
-                                wire:confirm="Retirer votre soumission ?"
-                            />
+                        <x-input
+                            label="Moyenne de la classe sur {{ $moyClsMax }}"
+                            wire:model="moyenneClasse"
+                            type="number"
+                            step="0.1"
+                            min="0"
+                            max="{{ $moyClsMax }}"
+                            placeholder="0.0"
+                            icon="o-users"
+                            :disabled="!$effectiveCanEdit"
+                        />
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <x-input
+                            label="DISCIPLINE (Dim. Pers.)"
+                            wire:model="disciplineStatus"
+                            placeholder="Ex: A, B, B+…"
+                            icon="o-shield-check"
+                            :disabled="!$effectiveCanEdit"
+                        />
+
+                        <x-textarea
+                            label="OBSERVATIONS"
+                            wire:model="teacherComment"
+                            rows="2"
+                            placeholder="Commentaire de l'enseignant…"
+                            :disabled="!$effectiveCanEdit"
+                        />
+                    </div>
+
+                    @if($effectiveCanEdit)
+                    <div class="flex justify-end gap-2 pt-2 border-t border-indigo-100">
+                        <x-button
+                            label="💾 Enregistrer & Soumettre"
+                            wire:click="saveGrades"
+                            class="btn-primary btn-sm"
+                            spinner="saveGrades"
+                            icon="o-check"
+                        />
+                    </div>
+                    @endif
+                </div>
+
+                {{-- Status / submission badges --}}
+                @if($bulletin && $bulletin->status === \App\Enums\BulletinStatusEnum::REJECTED)
+                    @php $lastRejection = $bulletin->approvals->where('action', 'rejected')->last(); @endphp
+                    <div class="flex items-center gap-3 p-3 bg-error/10 border border-error/20 rounded-xl">
+                        <span class="text-2xl">↩</span>
+                        <div>
+                            <p class="font-semibold text-sm text-error">Bulletin rejeté — veuillez corriger</p>
+                            @if($lastRejection?->comment)
+                            <p class="text-xs text-base-content/60 italic">{{ $lastRejection->comment }}</p>
                             @endif
                         </div>
+                    </div>
 
-                    @elseif($bulletin && ! in_array($bulletin->status->value, ['draft', 'rejected']))
-                        <div class="flex items-center justify-between p-3 bg-info/10 border border-info/20 rounded-xl">
-                            <span class="text-sm">
-                                Statut : <strong class="badge {{ $bulletin->status->color() }} badge-sm ml-1">{{ $bulletin->status->label() }}</strong>
-                            </span>
-                            <span class="text-xs text-base-content/50">Lecture seule</span>
+                @elseif($teacherSubmitted)
+                    @if($progress['total'] > 0)
+                    <div class="p-3 bg-base-200 rounded-xl space-y-2">
+                        <div class="flex items-center justify-between">
+                            <p class="text-xs font-semibold">{{ $progress['submitted'] }}/{{ $progress['total'] }} enseignants ont soumis</p>
+                            @if($progress['submitted'] === $progress['total'])
+                                <span class="badge badge-success badge-sm">✓ Transmis à la pédagogie</span>
+                            @endif
                         </div>
-
-                    @else
-                        @if($progress['submitted'] > 0)
-                        <div class="flex items-center gap-2 p-2 bg-base-200 rounded-lg text-xs">
-                            <span class="text-base-content/60">Autres enseignants :</span>
+                        <div class="w-full bg-base-300 rounded-full h-1.5">
+                            <div class="bg-primary h-1.5 rounded-full transition-all"
+                                 style="width: {{ $progress['total'] > 0 ? round($progress['submitted'] / $progress['total'] * 100) : 0 }}%">
+                            </div>
+                        </div>
+                        <div class="flex flex-wrap gap-1.5">
                             @foreach($progress['teachers'] as $t)
-                            <span class="badge {{ $t['submitted'] ? 'badge-success' : 'badge-ghost' }} badge-xs">
-                                {{ $t['submitted'] ? '✓' : '⏳' }} {{ explode(' ', $t['name'])[0] }}
+                            <span class="badge {{ $t['submitted'] ? 'badge-success' : 'badge-warning' }} badge-xs gap-1">
+                                {{ $t['submitted'] ? '✓' : '⏳' }} {{ $t['name'] }}
                             </span>
                             @endforeach
                         </div>
-                        @endif
+                    </div>
                     @endif
 
+                    <div class="flex items-center justify-between gap-3 bg-success/10 px-3 py-2 rounded-lg">
+                        <div class="flex items-center gap-2 text-xs text-success">
+                            <svg class="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                            </svg>
+                            Vos notes sont soumises — vous pouvez toujours les corriger.
+                        </div>
+                        @if($bulletin)
+                        <x-button
+                            label="↩ Retirer ma soumission"
+                            wire:click="withdrawSubmission"
+                            class="btn-warning btn-xs"
+                            spinner="withdrawSubmission"
+                            tooltip="Retirer votre soumission pour corriger vos notes"
+                            wire:confirm="Retirer votre soumission ?"
+                        />
+                        @endif
+                    </div>
+
+                @elseif($bulletin && ! in_array($bulletin->status->value, ['draft', 'rejected']))
+                    <div class="flex items-center justify-between p-3 bg-info/10 border border-info/20 rounded-xl">
+                        <span class="text-sm">
+                            Statut : <strong class="badge {{ $bulletin->status->color() }} badge-sm ml-1">{{ $bulletin->status->label() }}</strong>
+                        </span>
+                        <span class="text-xs text-base-content/50">Édition libre activée</span>
+                    </div>
+
+                @else
+                    @if($progress['submitted'] > 0)
+                    <div class="flex items-center gap-2 p-2 bg-base-200 rounded-lg text-xs">
+                        <span class="text-base-content/60">Autres enseignants :</span>
+                        @foreach($progress['teachers'] as $t)
+                        <span class="badge {{ $t['submitted'] ? 'badge-success' : 'badge-ghost' }} badge-xs">
+                            {{ $t['submitted'] ? '✓' : '⏳' }} {{ explode(' ', $t['name'])[0] }}
+                        </span>
+                        @endforeach
+                    </div>
+                    @endif
                 @endif
 
             </div>
