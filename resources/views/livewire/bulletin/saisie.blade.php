@@ -50,6 +50,33 @@ new #[Layout('components.layouts.app')] class extends Component {
     public function updatedSelectedClassroom(): void { $this->resetForm(); }
     public function updatedSelectedPeriod(): void    { $this->resetForm(); }
 
+    /**
+     * Format a numeric value for display in a number input.
+     *
+     * Strips the trailing zeros / dot that Eloquent's `decimal:2` cast
+     * leaves behind, so values read from the DB (whether entered by hand
+     * in saisir or written by the Excel importer) all look the same:
+     *
+     *   "156.50" → "156.5"
+     *   "14.00"  → "14"
+     *   "13.5"   → "13.5"
+     *   null/""  → ""
+     *   0 / "0"  → "0"   (legitimate zero, NOT blanked)
+     *
+     * This matches what GradeSheetExport's formatScore() writes to Excel
+     * and what the carnet uses for its TOTAUX / MOYENNES row — so the
+     * three views never disagree on how a number looks.
+     */
+    protected function formatNumericForInput(mixed $value): string
+    {
+        if ($value === null || $value === '') return '';
+        if (! is_numeric($value)) return (string) $value;
+
+        $formatted = number_format((float) $value, 2, '.', '');
+        $formatted = rtrim(rtrim($formatted, '0'), '.');
+        return $formatted === '' ? '0' : $formatted;
+    }
+
     protected function userCanAlwaysEdit(?Bulletin $bulletin = null): bool
     {
         $user = auth()->user();
@@ -78,6 +105,16 @@ new #[Layout('components.layouts.app')] class extends Component {
         $this->loadOrCreateBulletin($studentId);
     }
 
+    /**
+     * Load (or create) the bulletin for the given student in the current
+     * (period, year). Hydrates every form field from the DB so values
+     * entered via saisir AND values written by the Excel importer behave
+     * identically.
+     *
+     * Numeric fields go through formatNumericForInput() to strip the
+     * trailing zeros from decimal casts — pure display normalization,
+     * no rounding, no rescaling.
+     */
     protected function loadOrCreateBulletin(int $studentId): void
     {
         if (! $this->selectedPeriod || ! $this->selectedYear) return;
@@ -86,15 +123,24 @@ new #[Layout('components.layouts.app')] class extends Component {
         $bulletin = app(CreateBulletinAction::class)->execute($student, $this->selectedPeriod, $this->selectedYear);
 
         $this->bulletinId       = $bulletin->id;
-        $this->teacherComment   = $bulletin->teacher_comment ?? '';
-        $this->disciplineStatus = $bulletin->discipline_status ?? '';
-        $this->totalManuel      = (string) ($bulletin->total_manuel ?? '');
-        $this->moyenne10        = (string) ($bulletin->moyenne_10 ?? '');
-        $this->moyenneClasse    = (string) ($bulletin->moyenne_classe ?? '');
+        $this->teacherComment   = (string) ($bulletin->teacher_comment   ?? '');
+        $this->disciplineStatus = (string) ($bulletin->discipline_status ?? '');
+        $this->totalManuel      = $this->formatNumericForInput($bulletin->total_manuel);
+        $this->moyenne10        = $this->formatNumericForInput($bulletin->moyenne_10);
+        $this->moyenneClasse    = $this->formatNumericForInput($bulletin->moyenne_classe);
         $this->grades           = [];
 
+        // Normalize grade values: numeric scores are formatted with
+        // formatNumericForInput; competence statuses (A/EVA/NA) come
+        // through as their string value. Anything else stays as-is.
         foreach ($bulletin->grades as $grade) {
-            $this->grades[$grade->competence_id] = $grade->score ?? $grade->competence_status?->value;
+            if ($grade->score !== null) {
+                $this->grades[$grade->competence_id] = $this->formatNumericForInput($grade->score);
+            } elseif ($grade->competence_status !== null) {
+                $this->grades[$grade->competence_id] = is_string($grade->competence_status)
+                    ? $grade->competence_status
+                    : $grade->competence_status->value;
+            }
         }
     }
 
@@ -163,6 +209,26 @@ new #[Layout('components.layouts.app')] class extends Component {
         ];
     }
 
+    /**
+     * Parse a user-entered (or imported-then-displayed) numeric string
+     * into a float or null. Handles French-style commas, stray spaces,
+     * and empty strings.
+     *
+     *   "" / null      → null  (cleared)
+     *   "0" / "0.0"    → 0.0   (legitimate zero)
+     *   "156,5"        → 156.5
+     *   "  14.00  "    → 14.0
+     *   not numeric    → null  (treated as cleared, prevents crashes)
+     */
+    protected function parseNumericInput(mixed $raw): ?float
+    {
+        if ($raw === null) return null;
+        $trimmed = trim((string) $raw);
+        if ($trimmed === '') return null;
+        $clean = str_replace([' ', ','], ['', '.'], $trimmed);
+        return is_numeric($clean) ? (float) $clean : null;
+    }
+
     public function saveGrades(): void
     {
         if (! $this->bulletinId) return;
@@ -182,9 +248,10 @@ new #[Layout('components.layouts.app')] class extends Component {
         $moyMax    = $scale['moyenne_max'];
         $moyClsMax = $scale['moyenne_classe_max'];
 
-        $totalVal     = $this->totalManuel   !== '' ? (float) $this->totalManuel   : null;
-        $moyVal       = $this->moyenne10     !== '' ? (float) $this->moyenne10     : null;
-        $moyClasseVal = $this->moyenneClasse !== '' ? (float) $this->moyenneClasse : null;
+        // Parse the form values robustly (handles "156,5", "14.00", empty).
+        $totalVal     = $this->parseNumericInput($this->totalManuel);
+        $moyVal       = $this->parseNumericInput($this->moyenne10);
+        $moyClasseVal = $this->parseNumericInput($this->moyenneClasse);
 
         if ($totalVal !== null && ($totalVal < 0 || $totalVal > $totalMax + 0.01)) {
             $this->error('Total invalide.', "La valeur doit être entre 0 et {$totalMax}.", icon: 'o-x-circle', position: 'toast-top toast-end');
@@ -360,8 +427,6 @@ new #[Layout('components.layouts.app')] class extends Component {
         $isDirection = $user->hasAnyRole(['admin', 'direction']);
         $userId      = $user->id;
 
-        // ALL bulletins for the class+period+year (any status). Per-bulletin
-        // permission checks happen inside the transaction below.
         $bulletins = Bulletin::where('classroom_id', $this->selectedClassroom)
             ->where('academic_year_id', $this->selectedYear)
             ->where('period', $this->selectedPeriod)
@@ -392,23 +457,19 @@ new #[Layout('components.layouts.app')] class extends Component {
                     continue;
                 }
 
-                // 1) Wipe grades
                 $gradesDeleted += $bulletin->grades()->count();
                 $bulletin->grades()->delete();
 
-                // 2) Wipe teacher submissions
                 if (method_exists($bulletin, 'teacherSubmissions')) {
                     $submissionsDeleted += $bulletin->teacherSubmissions()->count();
                     $bulletin->teacherSubmissions()->delete();
                 }
 
-                // 3) Wipe approvals trail (best-effort)
                 if (method_exists($bulletin, 'approvals')) {
                     try { $bulletin->approvals()->delete(); }
                     catch (\Throwable $e) { /* ignore — relation may be read-only */ }
                 }
 
-                // 4) Reset every editable column on the bulletin itself
                 $resetData = [
                     'total_manuel'          => null,
                     'moyenne_10'            => null,
@@ -426,8 +487,6 @@ new #[Layout('components.layouts.app')] class extends Component {
                     'status'                => BulletinStatusEnum::DRAFT,
                 ];
 
-                // Optional legacy columns — only included when they exist in
-                // the bulletins table to avoid SQL errors.
                 foreach (['direction_comment', 'appreciation', 'total_score', 'moyenne', 'class_moyenne'] as $optional) {
                     if (\Schema::hasColumn($bulletin->getTable(), $optional)) {
                         $resetData[$optional] = null;
@@ -502,6 +561,17 @@ new #[Layout('components.layouts.app')] class extends Component {
         return Excel::download($export, $export->getFilename());
     }
 
+    /**
+     * Import grades from an uploaded Excel file.
+     *
+     * IMPORTANT — round-trip behaviour:
+     *   The importer writes the bulletins.* and bulletin_grades.* rows
+     *   directly with whatever values were in the spreadsheet (no
+     *   calculation, no conversion). After import succeeds we refresh
+     *   the currently-open student via loadOrCreateBulletin() so the
+     *   form fields immediately reflect the newly-imported values —
+     *   no need to re-click the student.
+     */
     public function importGrades(): void
     {
         if (! $this->selectedClassroom || ! $this->selectedPeriod || ! $this->selectedYear || ! $this->selectedNiveau) {
@@ -583,6 +653,9 @@ new #[Layout('components.layouts.app')] class extends Component {
                 $this->success($message, icon: 'o-arrow-up-tray', position: 'toast-top toast-end');
             }
 
+            // ── Refresh the open student so the form fields immediately
+            //    reflect what the importer just wrote — totals, moyennes,
+            //    discipline, observations, and grades all re-hydrate.
             if ($this->selectedStudent) $this->loadOrCreateBulletin($this->selectedStudent);
 
         } catch (\Maatwebsite\Excel\Validators\ValidationException $e) {
@@ -730,15 +803,6 @@ new #[Layout('components.layouts.app')] class extends Component {
         $candidates   = $this->summaryScaleCandidates();
         $summaryScale = self::resolveSummaryScale($candidates);
 
-        \Log::debug('Saisie summary scale', [
-            'selectedNiveau'    => $this->selectedNiveau,
-            'selectedClassroom' => $this->selectedClassroom,
-            'candidates'        => $candidates,
-            'matched_key'       => $summaryScale['matched_key'] ?? null,
-            'total_max'         => $summaryScale['total_max'],
-            'moyenne_max'       => $summaryScale['moyenne_max'],
-        ]);
-
         $periodLabel = match ($this->selectedPeriod) {
             'T1' => '1er trimestre',
             'T2' => '2ème trimestre',
@@ -866,15 +930,7 @@ new #[Layout('components.layouts.app')] class extends Component {
                     <x-button label="⬆ Importer" wire:click="importGrades" class="btn-primary btn-sm" spinner="importGrades" icon="o-arrow-up-tray" />
                 </div>
 
-                {{-- ════════════════════════════════════════════════════════════════
-                     RÉINITIALISER — always visible when a class+period is chosen.
-                     Wipes EVERYTHING for the (class, trimestre, année) :
-                       • toutes les notes
-                       • total / moyenne / moyenne classe
-                       • discipline + observations
-                       • soumissions enseignants + horodatages d'approbation
-                       • statut → BROUILLON
-                     ════════════════════════════════════════════════════════════════ --}}
+                {{-- RÉINITIALISER — always visible when a class+period is chosen. --}}
                 <div class="border-l border-base-200 pl-3">
                     <x-button
                         label="🔄 Réinitialiser{{ $resetCount > 0 ? ' ('.$resetCount.')' : '' }}"
@@ -1019,15 +1075,64 @@ new #[Layout('components.layouts.app')] class extends Component {
                         <span class="badge badge-ghost badge-xs">Niveau {{ $selectedNiveau }}</span>
                     </div>
 
+                    {{-- Numeric fields. Each binds to a clean string (no
+                         "14.00" / "156.50" artefacts from the decimal cast),
+                         and the matching wire:key forces the input to
+                         re-render after import / save / withdraw — so a
+                         freshly-imported value appears in the box without
+                         needing a manual refresh. --}}
                     <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-                        <x-input label="Total sur {{ $totalMax ?: '?' }}" wire:model="totalManuel" type="number" step="0.5" min="0" max="{{ $totalMax ?: 9999 }}" placeholder="0" icon="o-calculator" :disabled="!$effectiveCanEdit" />
-                        <x-input label="Moyenne sur {{ $moyMax }}" wire:model="moyenne10" type="number" step="0.1" min="0" max="{{ $moyMax }}" placeholder="0.0" icon="o-chart-bar" :disabled="!$effectiveCanEdit" />
-                        <x-input label="Moyenne de la classe sur {{ $moyClsMax }}" wire:model="moyenneClasse" type="number" step="0.1" min="0" max="{{ $moyClsMax }}" placeholder="0.0" icon="o-users" :disabled="!$effectiveCanEdit" />
+                        <x-input
+                            wire:key="total-{{ $bulletinId }}-{{ $totalManuel }}"
+                            label="Total sur {{ $totalMax ?: '?' }}"
+                            wire:model="totalManuel"
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            max="{{ $totalMax ?: 9999 }}"
+                            placeholder="0"
+                            icon="o-calculator"
+                            :disabled="!$effectiveCanEdit" />
+                        <x-input
+                            wire:key="moy-{{ $bulletinId }}-{{ $moyenne10 }}"
+                            label="Moyenne sur {{ $moyMax }}"
+                            wire:model="moyenne10"
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            max="{{ $moyMax }}"
+                            placeholder="0.0"
+                            icon="o-chart-bar"
+                            :disabled="!$effectiveCanEdit" />
+                        <x-input
+                            wire:key="moycls-{{ $bulletinId }}-{{ $moyenneClasse }}"
+                            label="Moyenne de la classe sur {{ $moyClsMax }}"
+                            wire:model="moyenneClasse"
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            max="{{ $moyClsMax }}"
+                            placeholder="0.0"
+                            icon="o-users"
+                            :disabled="!$effectiveCanEdit" />
                     </div>
 
+                    {{-- Discipline + Observations — render imported values directly. --}}
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        <x-input label="DISCIPLINE (Dim. Pers.)" wire:model="disciplineStatus" placeholder="Ex: A, B, B+…" icon="o-shield-check" :disabled="!$effectiveCanEdit" />
-                        <x-textarea label="OBSERVATIONS" wire:model="teacherComment" rows="2" placeholder="Commentaire de l'enseignant…" :disabled="!$effectiveCanEdit" />
+                        <x-input
+                            wire:key="disc-{{ $bulletinId }}"
+                            label="DISCIPLINE (Dim. Pers.)"
+                            wire:model="disciplineStatus"
+                            placeholder="Ex: A, B, B+…"
+                            icon="o-shield-check"
+                            :disabled="!$effectiveCanEdit" />
+                        <x-textarea
+                            wire:key="obs-{{ $bulletinId }}"
+                            label="OBSERVATIONS"
+                            wire:model="teacherComment"
+                            rows="2"
+                            placeholder="Commentaire de l'enseignant…"
+                            :disabled="!$effectiveCanEdit" />
                     </div>
 
                     @if($effectiveCanEdit)

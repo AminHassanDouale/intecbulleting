@@ -25,9 +25,6 @@ new #[Layout('components.layouts.print')] class extends Component {
      * and saisir's resolveSummaryScale() so the carnet, grade entry screen,
      * and Excel export all show identical maxima for the same student.
      *
-     * Tries each candidate string in order; the first one containing a
-     * recognised prefix (longest first: CM2, CM1, CE2, CE1, CP) wins.
-     *
      * @param array<int, string|null> $candidates
      */
     public static function resolveSummaryScale(array $candidates): array
@@ -77,28 +74,20 @@ new #[Layout('components.layouts.print')] class extends Component {
     {
         $this->student->load(['classroom.niveau', 'academicYear']);
 
-        $periods       = ['T1', 'T2', 'T3'];
-
-        // ── Resolve scoping codes the SAME way saisir does ───────────────────
-        //   $sectionCode : full classroom code (e.g. "CPA", "GSB")
-        //   $levelCode   : code stripped of trailing A/B (e.g. "CP", "GS")
-        //   $niveauCode  : niveau->code string (used for whereHas)
-        // ─────────────────────────────────────────────────────────────────────
+        $periods     = ['T1', 'T2', 'T3'];
         $sectionCode = (string) ($this->student->classroom->code ?? '');
         $levelCode   = preg_replace('/[AB]$/', '', $sectionCode) ?: $sectionCode;
         $niveauCode  = $this->student->classroom->niveau->code ?? null;
 
-        // ── 1. Academic year ──────────────────────────────────────────────────
         $academicYearId = $this->student->academic_year_id
             ?? \App\Models\AcademicYear::where('is_current', true)->value('id');
 
-        // ── 2. Bulletins (Collection — use ->get($key), never [$key]) ─────────
+        // Bulletins (Collection keyed by period)
         $bulletins = Bulletin::where('student_id', $this->student->id)
             ->where('academic_year_id', $academicYearId)
             ->get()
             ->keyBy('period');
 
-        // ── 3. All grades for this student's bulletins ────────────────────────
         $bulletinIds = $bulletins->pluck('id')->filter()->values()->toArray();
 
         $allGrades = $bulletinIds
@@ -107,13 +96,7 @@ new #[Layout('components.layouts.print')] class extends Component {
 
         $gradesByBulletin = $allGrades->groupBy('bulletin_id');
 
-        // ── 4. Subjects for this niveau + classroom (mirrors saisir.blade.php) ─
-        //   Three-way scope precedence:
-        //     1. section_code exact match (e.g. "CPA")
-        //     2. classroom_code level match with null section_code (e.g. "CP")
-        //     3. fully global (both null)
-        //   Competences themselves are also filtered by section_code.
-        // ──────────────────────────────────────────────────────────────────────
+        // Subjects scoped to niveau + section/level (mirrors saisir)
         $subjects = Subject::whereHas('niveau', fn($q) => $q->where('code', $niveauCode))
             ->where(function ($q) use ($sectionCode, $levelCode) {
                 $q->where('section_code', $sectionCode)
@@ -135,10 +118,7 @@ new #[Layout('components.layouts.print')] class extends Component {
             ->orderBy('order')
             ->get();
 
-        // ── 5. Grades map [period][competence_id] => BulletinGrade ───────────
-        // No status filter: render whatever's stored in the DB regardless of
-        // the bulletin's workflow status. The caller (route) controls who can
-        // view the carnet at all.
+        // Grades map [period][competence_id] => BulletinGrade
         $gradesMap = [];
         foreach ($periods as $p) {
             $gradesMap[$p] = [];
@@ -150,7 +130,7 @@ new #[Layout('components.layouts.print')] class extends Component {
             }
         }
 
-        // ── 6. Status map + score display ─────────────────────────────────────
+        // Status + score display
         $statusMap    = [];
         $scoreDisplay = [];
 
@@ -191,11 +171,7 @@ new #[Layout('components.layouts.print')] class extends Component {
             }
         }
 
-        // ── 7. Summary scale — IDENTICAL logic to saisir + GradeSheetExport ──
-        //   CP  (A/B)            → Total sur 140, Moyenne sur 10
-        //   CE1/CE2/CM1/CM2 (any)→ Total sur 200, Moyenne sur 20
-        //   Unknown niveau       → falls back to sum of subject->max_score
-        // ─────────────────────────────────────────────────────────────────────
+        // Summary scale
         $summaryCandidates = [
             $niveauCode,
             $sectionCode,
@@ -210,12 +186,26 @@ new #[Layout('components.layouts.print')] class extends Component {
         $moyenneMax    = $summaryScale['moyenne_max'];
         $moyenneClsMax = $summaryScale['moyenne_classe_max'];
 
-        // ── 8. Per-period totals ───────────────────────────────────────────────
+        // ═══════════════════════════════════════════════════════════════════
+        // Per-period totals
+        //
+        // CRITICAL RULE — the values stored in the `bulletins` table
+        // (total_manuel, moyenne_10, moyenne_classe, discipline_status,
+        // teacher_comment, direction_comment) are the ABSOLUTE source of
+        // truth. They are what the teacher / direction entered (via saisie
+        // OR Excel import), and the carnet must render them verbatim with
+        // NO recalculation when they are present.
+        //
+        // The carnet only computes a FALLBACK from the grade rows when the
+        // corresponding bulletin column is NULL — i.e. nothing was ever
+        // entered for that field. As soon as a value exists in the DB
+        // (even 0), it wins.
+        // ═══════════════════════════════════════════════════════════════════
         $periodTotals = [];
 
         foreach ($periods as $p) {
             $b           = $bulletins->get($p);
-            $isVisible   = $b !== null;          // any bulletin row counts
+            $isVisible   = $b !== null;
             $isPublished = $b && $b->status === BulletinStatusEnum::PUBLISHED;
 
             if (!$isVisible || !$b) {
@@ -232,72 +222,81 @@ new #[Layout('components.layouts.print')] class extends Component {
                 continue;
             }
 
-            $total          = 0.0;
-            $maxTotalFloat  = 0.0;
-            $anySubjectGraded = false;   // at least one subject has at least one graded competence
+            // ── Read stored values FIRST (saisir + import field names),
+            //    fall back to legacy fields for old data.
+            //    Treat ONLY null as "not entered"; 0 is a valid score.
+            $storedTotal        = $b->total_manuel    ?? $b->total_score   ?? null;
+            $storedMoyenne      = $b->moyenne_10      ?? $b->moyenne       ?? null;
+            $storedClassMoyenne = $b->moyenne_classe  ?? $b->class_moyenne ?? null;
 
-            foreach ($subjects as $subject) {
-                $subjectMax    = (float) ($subject->max_score ?? 0);
-                $competences   = $subject->competences;
-                $compCount     = $competences->count();
+            // ── Compute fallback ONLY if at least one stored value is null.
+            //    Skip the computation entirely when all three are set —
+            //    avoids wasted work and any risk of accidentally overriding.
+            $computedTotal        = null;
+            $computedMoyenne      = null;
+            $computedClassMoyenne = null;
 
-                if ($compCount === 0 || $subjectMax === 0) continue;
+            $needsTotalFallback   = $storedTotal === null;
+            $needsMoyenneFallback = $storedMoyenne === null;
+            $needsClassFallback   = $storedClassMoyenne === null;
 
-                $maxTotalFloat += $subjectMax;
-                $isPrescolaireSub = $subject->scale_type === 'competence';
+            if ($needsTotalFallback || $needsMoyenneFallback) {
+                $total          = 0.0;
+                $maxTotalFloat  = 0.0;
+                $anySubjectGraded = false;
 
-                $subjectScore   = 0.0;
-                $gradedCount    = 0;
+                foreach ($subjects as $subject) {
+                    $subjectMax  = (float) ($subject->max_score ?? 0);
+                    $competences = $subject->competences;
+                    $compCount   = $competences->count();
 
-                foreach ($competences as $competence) {
-                    $grade = $gradesMap[$p][$competence->id] ?? null;
-                    if (!$grade) continue;
+                    if ($compCount === 0 || $subjectMax === 0) continue;
 
-                    if ($isPrescolaireSub && $grade->competence_status !== null) {
-                        $status = is_string($grade->competence_status)
-                            ? $grade->competence_status
-                            : $grade->competence_status->value;
-                        $compMax = (float) ($competence->max_score ?? $subjectMax / $compCount);
-                        $subjectScore += match ($status) {
-                            'A'   => $compMax,
-                            'EVA' => $compMax * 0.5,
-                            'NA'  => 0,
-                            default => 0,
-                        };
-                        $gradedCount++;
-                    } elseif ($grade->score !== null) {
-                        $compMax = (float) ($competence->max_score ?? $subjectMax / $compCount);
-                        $ratio = $compMax > 0 ? (float) $grade->score / $compMax : 0;
-                        $subjectScore += $ratio * ($subjectMax / $compCount);
-                        $gradedCount++;
+                    $maxTotalFloat += $subjectMax;
+                    $isPrescolaireSub = $subject->scale_type === 'competence';
+
+                    $subjectScore = 0.0;
+                    $gradedCount  = 0;
+
+                    foreach ($competences as $competence) {
+                        $grade = $gradesMap[$p][$competence->id] ?? null;
+                        if (!$grade) continue;
+
+                        if ($isPrescolaireSub && $grade->competence_status !== null) {
+                            $status = is_string($grade->competence_status)
+                                ? $grade->competence_status
+                                : $grade->competence_status->value;
+                            $compMax = (float) ($competence->max_score ?? $subjectMax / $compCount);
+                            $subjectScore += match ($status) {
+                                'A'   => $compMax,
+                                'EVA' => $compMax * 0.5,
+                                'NA'  => 0,
+                                default => 0,
+                            };
+                            $gradedCount++;
+                        } elseif ($grade->score !== null) {
+                            $compMax = (float) ($competence->max_score ?? $subjectMax / $compCount);
+                            $ratio = $compMax > 0 ? (float) $grade->score / $compMax : 0;
+                            $subjectScore += $ratio * ($subjectMax / $compCount);
+                            $gradedCount++;
+                        }
                     }
+
+                    if ($gradedCount > 0) $anySubjectGraded = true;
+                    $total += $subjectScore;
                 }
 
-                if ($gradedCount > 0) $anySubjectGraded = true;
-
-                $total += $subjectScore;
+                if ($anySubjectGraded) {
+                    $computedTotal = round($total, 2);
+                    if ($maxTotalFloat > 0) {
+                        $computedMoyenne = round(($total / $maxTotalFloat) * $moyenneMax, 2);
+                    }
+                }
             }
 
-            // Compute moyenne on the level scale (10 for CP, 20 for CE1+).
-            // Never returns NULL when at least one grade exists — partial data
-            // is better than nothing for a printable carnet.
-            $moyenne = ($maxTotalFloat > 0 && $anySubjectGraded)
-                ? round(($total / $maxTotalFloat) * $moyenneMax, 2)
-                : null;
-
-            // Read saisir/export field names FIRST (total_manuel, moyenne_10),
-            // fall back to legacy fields (total_score, moyenne) for old data.
-            // NB: only null is treated as "no value"; 0 is a valid score.
-            $modelTotal   = $b->total_manuel  ?? $b->total_score ?? null;
-            $modelMoyenne = $b->moyenne_10    ?? $b->moyenne     ?? null;
-
-            $finalTotal   = ($modelTotal   !== null) ? (float) $modelTotal   : ($anySubjectGraded ? round($total, 2) : null);
-            $finalMoyenne = ($modelMoyenne !== null) ? (float) $modelMoyenne : $moyenne;
-
-            $classMoyenne = null;
-            if ($isVisible) {
-                // No status filter — include all classmates that have any
-                // bulletin row, regardless of workflow status.
+            // ── Compute class-moyenne fallback ONLY if NOT stored.
+            //    The imported `moyenne_classe` ALWAYS wins when present.
+            if ($needsClassFallback) {
                 $classBulletins = Bulletin::where('classroom_id', $this->student->classroom_id)
                     ->where('academic_year_id', $academicYearId)
                     ->where('period', $p)
@@ -309,20 +308,20 @@ new #[Layout('components.layouts.print')] class extends Component {
 
                     $classMoyennes = [];
                     foreach ($classBulletins as $cb) {
-                        $cbGrades   = $allClassGrades->get($cb->id, collect());
-                        $cbTotal    = 0.0;
-                        $cbMaxTotal = 0.0;
+                        $cbGrades    = $allClassGrades->get($cb->id, collect());
+                        $cbTotal     = 0.0;
+                        $cbMaxTotal  = 0.0;
                         $cbAnyGraded = false;
 
                         foreach ($subjects as $subject) {
-                            $subjectMax  = (float) ($subject->max_score ?? 0);
-                            $compCount   = $subject->competences->count();
+                            $subjectMax = (float) ($subject->max_score ?? 0);
+                            $compCount  = $subject->competences->count();
                             if ($compCount === 0 || $subjectMax === 0) continue;
 
-                            $cbMaxTotal    += $subjectMax;
+                            $cbMaxTotal      += $subjectMax;
                             $isPrescolaireSub = $subject->scale_type === 'competence';
-                            $cbSubScore     = 0.0;
-                            $cbGraded       = 0;
+                            $cbSubScore       = 0.0;
+                            $cbGraded         = 0;
 
                             foreach ($subject->competences as $competence) {
                                 $g = $cbGrades->firstWhere('competence_id', $competence->id);
@@ -351,24 +350,24 @@ new #[Layout('components.layouts.print')] class extends Component {
                     }
 
                     if (count($classMoyennes) > 0) {
-                        $classMoyenne = round(array_sum($classMoyennes) / count($classMoyennes), 2);
+                        $computedClassMoyenne = round(array_sum($classMoyennes) / count($classMoyennes), 2);
                     }
                 }
-
-                if ($classMoyenne === null) {
-                    $cm = $b->moyenne_classe ?? $b->class_moyenne ?? null;
-                    if ($cm !== null) $classMoyenne = (float) $cm;
-                }
             }
+
+            // ── Final values: stored wins, computed is fallback only.
+            $finalTotal        = $storedTotal        !== null ? (float) $storedTotal        : $computedTotal;
+            $finalMoyenne      = $storedMoyenne      !== null ? (float) $storedMoyenne      : $computedMoyenne;
+            $finalClassMoyenne = $storedClassMoyenne !== null ? (float) $storedClassMoyenne : $computedClassMoyenne;
 
             $periodTotals[$p] = [
                 'total'             => $finalTotal,
                 'moyenne'           => $finalMoyenne,
-                'class_moyenne'     => $classMoyenne,
+                'class_moyenne'     => $finalClassMoyenne,
                 'teacher_comment'   => $b->teacher_comment   ?? null,
-                'direction_comment' => $b->direction_comment ?? $b->appreciation ?? null,
-                // Unified observation — first non-empty of teacher / direction / appreciation.
-                // Used by the back-panel APPRECIATIONS GENERALES table on page 1.
+                'direction_comment' => $b->direction_comment ?? null,
+                // Observation column on page 1 — show whatever observation
+                // was entered, prefer teacher's, then direction's, then legacy.
                 'observation'       => $b->teacher_comment
                                     ?: $b->direction_comment
                                     ?: $b->appreciation
@@ -384,16 +383,7 @@ new #[Layout('components.layouts.print')] class extends Component {
 
         $romanNumerals = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'];
 
-        // ── 9. Préscolaire — group competences by `domaine` within each subject
-        //      Produces: $subjectDomains[subject_id] = [
-        //          ['domaine' => 'LANGAGE ORAL', 'competences' => Collection<Competence>],
-        //          ['domaine' => 'PRÉLECTURE',   'competences' => Collection<Competence>],
-        //          ...
-        //      ]
-        //      Order is preserved: first time a domaine appears in the (already
-        //      ->orderBy('order')) competences list determines its slot.
-        //      Falls back to the subject name when `domaine` is null.
-        // ──────────────────────────────────────────────────────────────────────
+        // Preschool — group competences by `domaine` within each subject.
         $subjectDomains = [];
         foreach ($subjects as $subject) {
             $groups = [];
@@ -860,8 +850,8 @@ $nextClassCode = \App\Models\StudentPromotion::nextClassCode($classCode);
                 <tr>
                     <td class="per">{!! $num !!}<br><strong>{{ $lbl }}</strong></td>
                     <td class="obs">
-                        {{-- Falls back: teacher_comment → direction_comment → appreciation.
-                             Whichever column actually has data, render it. --}}
+                        {{-- Whatever observation was entered/imported (teacher_comment first,
+                             then direction_comment, then legacy appreciation). --}}
                         @if($periodTotals[$p]['observation'])
                             {{ $periodTotals[$p]['observation'] }}<br><br>
                         @else
@@ -1024,9 +1014,7 @@ $nextClassCode = \App\Models\StudentPromotion::nextClassCode($classCode);
             <span style="font-size:7.5pt;text-transform:none;">Année scolaire : {{ $yearLabel }}</span>
         </div>
 
-        {{-- Scrollable/clippable middle: subjects + DIM PERS + totals.
-             min-height:0 lets flex actually shrink this box; overflow:hidden
-             keeps the panel boundary clean if subjects are very long. --}}
+        {{-- Scrollable/clippable middle: subjects + DIM PERS + totals. --}}
         <div style="flex:1 1 auto;min-height:0;overflow:hidden;">
 
         @foreach($subjectsRight as $ridx => $subject)
@@ -1067,9 +1055,9 @@ $nextClassCode = \App\Models\StudentPromotion::nextClassCode($classCode);
         </table>
         @endforeach
 
-        {{-- DIMENSION PERSONNELLE — single discipline row matching the
-             reference doc layout (Roman numeral after the last subject).
-             Uses bulletin->discipline_status (text like "Très-bien"). --}}
+        {{-- DIMENSION PERSONNELLE — single discipline row.
+             Renders bulletin->discipline_status verbatim from the DB
+             (whatever was entered in saisir or imported from Excel). --}}
         @php
             $_dimIdx = ($splitAt + $subjectsRight->count());
         @endphp
@@ -1093,11 +1081,13 @@ $nextClassCode = \App\Models\StudentPromotion::nextClassCode($classCode);
             </tbody>
         </table>
 
-        </div>{{-- /middle scrollable area (DIM PERS table is the last thing inside) --}}
+        </div>{{-- /middle scrollable area --}}
 
-        {{-- TOTAUX / MOYENNES + DIM. PERS. — anchored at panel bottom, never clipped.
-             Labels are level-aware (CP=140/10, CE1+/=200/20) and mirror the
-             saisir grade-entry screen and the Excel export exactly. --}}
+        {{-- TOTAUX / MOYENNES + DIM. PERS. — anchored at panel bottom.
+             EVERY value here is read DIRECTLY from the DB (total_manuel,
+             moyenne_10, moyenne_classe, discipline_status). No computation,
+             no conversion — what the teacher saved in saisir or imported
+             from Excel is what gets printed. Period. --}}
         <table class="bk-tt" style="flex-shrink:0;margin-top:auto;">
             <colgroup>
                 <col style="width:40%"><col style="width:20%"><col style="width:20%"><col style="width:20%">
@@ -1106,19 +1096,19 @@ $nextClassCode = \App\Models\StudentPromotion::nextClassCode($classCode);
                 <tr>
                     <td class="lbl">Total sur {{ $maxTotal }}</td>
                     @foreach(['T1','T2','T3'] as $_p)
-                    <td class="big">{{ $periodTotals[$_p]['total'] !== null ? number_format($periodTotals[$_p]['total'], 1) : '' }}</td>
+                    <td class="big">{{ $periodTotals[$_p]['total'] !== null ? rtrim(rtrim(number_format($periodTotals[$_p]['total'], 2, '.', ''), '0'), '.') : '' }}</td>
                     @endforeach
                 </tr>
                 <tr>
                     <td class="lbl">Moyenne sur {{ $moyenneMax }}</td>
                     @foreach(['T1','T2','T3'] as $_p)
-                    <td class="big">{{ $periodTotals[$_p]['moyenne'] !== null ? number_format($periodTotals[$_p]['moyenne'], 2) : '' }}</td>
+                    <td class="big">{{ $periodTotals[$_p]['moyenne'] !== null ? rtrim(rtrim(number_format($periodTotals[$_p]['moyenne'], 2, '.', ''), '0'), '.') : '' }}</td>
                     @endforeach
                 </tr>
                 <tr>
                     <td class="lbl">Moyenne de la classe sur {{ $moyenneClsMax }}</td>
                     @foreach(['T1','T2','T3'] as $_p)
-                    <td class="big">{{ $periodTotals[$_p]['class_moyenne'] !== null ? number_format($periodTotals[$_p]['class_moyenne'], 2) : '' }}</td>
+                    <td class="big">{{ $periodTotals[$_p]['class_moyenne'] !== null ? rtrim(rtrim(number_format($periodTotals[$_p]['class_moyenne'], 2, '.', ''), '0'), '.') : '' }}</td>
                     @endforeach
                 </tr>
                 <tr>
@@ -1130,7 +1120,7 @@ $nextClassCode = \App\Models\StudentPromotion::nextClassCode($classCode);
             </tbody>
         </table>
 
-        {{-- LÉGENDE — anchored at the bottom of the panel, never clipped --}}
+        {{-- LÉGENDE --}}
         <table class="bk-leg" style="flex-shrink:0;">
             <thead>
                 <tr>
