@@ -411,55 +411,12 @@ $isPrescolaire = mb_stripos($student->classroom->niveau->cycle ?? '', 'scolaire'
 $classCode     = $student->classroom->code ?? '—';
 $classSection  = $student->classroom->section ?? '';
 $niveauLabel   = $student->classroom->niveau->code ?? '';
+
+// Director name: hardcoded default, overridden by DB setting if present.
+$directorName  = \App\Models\SchoolSetting::get('director_name', 'Mohamoud Hared');
 @endphp
 
 <div>
-
-{{-- ══════════════════════════════════════════════════════════════════
-     DEBUG STRIP — admin/direction only, screen only.
-     Shows exactly what's stored in the DB so we can confirm whether
-     totals/observations/discipline are missing because the carnet
-     can't read them, or because they were never saved.
-     Remove this block once you've verified the data flow.
-     ══════════════════════════════════════════════════════════════════ --}}
-@if(auth()->check() && auth()->user()->hasAnyRole(['admin','direction']))
-<div style="background:#fef9c3;border:2px solid #ca8a04;border-radius:6px;padding:8px 14px;margin:6px;font-family:monospace;font-size:11px;color:#3f3f00;line-height:1.45;" class="bk-no-print ps-no-print">
-<strong style="font-size:13px;">🔍 DEBUG — Carnet data inspection</strong><br>
-Student: <b>{{ $student->full_name }}</b> (id={{ $student->id }})
-| Classroom: <b>{{ $student->classroom->code }}</b>
-| Niveau code: <b>{{ $student->classroom->niveau->code ?? 'NULL' }}</b>
-| Cycle: <b>{{ $student->classroom->niveau->cycle ?? 'NULL' }}</b>
-| isPrescolaire: <b>{{ $isPrescolaire ? 'YES' : 'no' }}</b>
-<br>
-Subjects loaded: <b>{{ $subjects->count() }}</b>
-@if($subjects->isNotEmpty())
-({{ $subjects->pluck('name')->join(', ') }})
-@endif
-<br>
-Bulletins:
-@forelse($bulletins as $p => $b)
-<br>&nbsp;&nbsp;• T={{ $p }}
-| status=<b>{{ $b->status->value ?? '—' }}</b>
-| grades=<b>{{ $b->grades->count() ?? 0 }}</b>
-| total_manuel=<b>{{ $b->total_manuel ?? 'NULL' }}</b>
-| moyenne_10=<b>{{ $b->moyenne_10 ?? 'NULL' }}</b>
-| moyenne_classe=<b>{{ $b->moyenne_classe ?? 'NULL' }}</b>
-| discipline=<b>{{ $b->discipline_status ?? 'NULL' }}</b>
-| teacher_comment=<b>{{ $b->teacher_comment ? '"'.mb_substr($b->teacher_comment,0,40).'…"' : 'NULL' }}</b>
-@empty
-<br>&nbsp;&nbsp;• No bulletins found for academic year.
-@endforelse
-<br>
-periodTotals (what the carnet renders):
-@foreach(['T1','T2','T3'] as $_p)
-<br>&nbsp;&nbsp;• {{ $_p }}: total=<b>{{ $periodTotals[$_p]['total'] ?? 'NULL' }}</b>
-| moyenne=<b>{{ $periodTotals[$_p]['moyenne'] ?? 'NULL' }}</b>
-| class_moyenne=<b>{{ $periodTotals[$_p]['class_moyenne'] ?? 'NULL' }}</b>
-| discipline_status=<b>{{ $periodTotals[$_p]['discipline_status'] ?? 'NULL' }}</b>
-| teacher_comment=<b>{{ ($periodTotals[$_p]['teacher_comment'] ?? null) ? 'YES' : 'NULL' }}</b>
-@endforeach
-</div>
-@endif
 
 @if($isPrescolaire)
 {{-- ══════════════════════════════════════════════════════════════
@@ -489,58 +446,71 @@ $_psTeacherName = $student->classroom->teacher?->name ?? '—';
 @endphp
 
 <style>
-@page { size: A4 landscape; margin: 0; }
-@media print { body{background:#fff;} .ps-wrap{padding:0;gap:0;} .ps-no-print{display:none!important;} }
+/* ── Reset & page setup ── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-*,*::before,*::after{box-sizing:border-box;}
-.ps-wrap  {display:flex;flex-direction:column;align-items:center;gap:8mm;padding:8mm;}
-.ps-page  {width:297mm;height:210mm;display:flex;flex-direction:row;background:#fff;
-           page-break-after:always;overflow:hidden;font-size:7.5pt;color:#000;
-           font-family:'Calibri',Arial,sans-serif;box-shadow:0 4px 18px rgba(0,0,0,.4);}
-.ps-panel {width:148.5mm;height:210mm;padding:5mm 6mm;overflow:hidden;position:relative;
-           border:4px solid #6B5000;}
-.ps-left  {border-right:2px solid #6B5000;}
-.ps-right {border-left:2px solid #6B5000;}
+@media print {
+    @page { size: A4 landscape; margin: 0; }
+    html, body { width: 297mm; height: 210mm; background: #fff; }
+    .ps-no-print { display: none !important; }
+    .ps-wrap { padding: 0; gap: 0; background: #fff; }
+    .ps-page { box-shadow: none; page-break-after: always; }
+    .ps-page:last-child { page-break-after: avoid; }
+}
 
-.ps-cover  {display:flex;flex-direction:column;align-items:center;height:100%;}
-.ps-sch-row{display:flex;align-items:center;gap:3mm;width:100%;margin-bottom:3mm;}
-.ps-sch-blk{flex:1;border-left:2.5px solid #6B5000;padding-left:3mm;}
-.ps-sch-nm {font-size:12pt;font-weight:700;font-style:italic;line-height:1.1;}
-.ps-sch-tag{font-size:7pt;font-style:italic;color:#444;}
-.ps-sch-ct {font-size:6.5pt;color:#444;margin-top:0.5mm;}
-.ps-btitle {font-size:9pt;font-weight:900;text-transform:uppercase;text-decoration:underline;margin:1.5mm 0 0.5mm;}
-.ps-bperiod{font-size:8pt;font-weight:700;margin-bottom:2mm;}
-.ps-gs-ttl {font-size:16pt;font-weight:900;font-family:'Palatino Linotype','Book Antiqua',Palatino,serif;
-            text-transform:uppercase;letter-spacing:2px;text-align:center;margin:2mm 0;}
-.ps-cbox   {border:2px solid #6B5000;border-radius:8px;width:100%;height:42mm;
-            display:flex;align-items:center;justify-content:center;
-            background:linear-gradient(135deg,#e8f4f0,#d4e8f5,#f5e8d4,#e8f0d4);margin-bottom:2.5mm;}
-.ps-info   {border:2px solid #6B5000;border-radius:8px;padding:2.5mm 3.5mm;width:100%;font-size:8pt;line-height:1.75;background:#fff;}
-.ps-ir     {display:flex;}
-.ps-il     {min-width:38mm;}
-.ps-iv     {font-weight:700;}
+@media screen {
+    @page { size: A4 landscape; margin: 0; }
+    body { background: #e5e7eb; }
+}
 
-.ps-intro  {font-size:7pt;line-height:1.55;text-align:justify;margin-bottom:1.5mm;}
-.ps-ibold  {font-weight:700;text-decoration:underline;}
-.ps-leg-t  {border-collapse:collapse;margin:2mm 0;font-size:7.5pt;width:90%;}
-.ps-leg-t td{border:1px solid #000;padding:1mm 3mm;}
-.ps-leg-t td:first-child{font-weight:900;text-align:center;width:12mm;}
-.ps-cm-lbl {font-size:8pt;font-weight:700;margin-top:3mm;margin-bottom:1.5mm;border-top:1.5px solid #6B5000;padding-top:2mm;}
-.ps-cm-box {border:1px solid #6B5000;border-radius:4px;padding:2mm 3mm;min-height:18mm;font-size:7.5pt;font-style:italic;background:#fffdf8;margin-bottom:3mm;}
-.ps-sig-t  {width:100%;border-collapse:collapse;font-size:7.5pt;}
-.ps-sig-t td,.ps-sig-t th{border:1px solid #000;padding:1.2mm 2mm;vertical-align:middle;}
-.ps-sig-dr td{background:#FFC000;font-weight:700;text-decoration:underline;font-size:8pt;padding:1.2mm 2mm;}
-.ps-sig-hr th{background:#FCE9D9;font-weight:700;text-align:center;width:33.3%;font-size:7.5pt;}
-.ps-sig-br td{background:#FCE9D9;height:22mm;width:33.3%;}
+.ps-wrap  { display: flex; flex-direction: column; align-items: center; gap: 8mm; padding: 8mm; }
+.ps-page  { width: 297mm; height: 210mm; display: flex; flex-direction: row; background: #fff;
+            overflow: hidden; font-size: 7.5pt; color: #000;
+            font-family: 'Calibri', Arial, sans-serif; box-shadow: 0 4px 18px rgba(0,0,0,.4); }
+.ps-panel { width: 148.5mm; height: 210mm; padding: 5mm 6mm; overflow: hidden; position: relative;
+            border: 4px solid #6B5000; }
+.ps-left  { border-right: 2px solid #6B5000; }
+.ps-right { border-left: 2px solid #6B5000; }
 
-.ps-comp   {width:100%;border-collapse:collapse;font-size:6.5pt;}
-.ps-comp th,.ps-comp td{border:1px solid #000;vertical-align:middle;padding:0.7mm 1.2mm;}
-.ps-hd     {background:#C2D59B;font-weight:700;text-align:center;font-size:7pt;}
-.ps-sub-h  {background:#C2D59B;font-weight:700;text-align:center;font-size:6.5pt;padding:0.5mm;}
-.ps-sep    {background:#FFC000;height:3px;padding:0;border:1px solid #6B5000;}
-.ps-dom-c  {font-weight:900;text-align:center;vertical-align:middle;font-size:6.5pt;text-transform:uppercase;word-break:break-word;}
-.ps-comp-c {font-size:6.5pt;}
-.ps-score  {text-align:center;font-weight:700;font-size:7pt;}
+.ps-cover  { display: flex; flex-direction: column; align-items: center; height: 100%; }
+.ps-sch-row{ display: flex; align-items: center; gap: 3mm; width: 100%; margin-bottom: 3mm; }
+.ps-sch-blk{ flex: 1; border-left: 2.5px solid #6B5000; padding-left: 3mm; }
+.ps-sch-nm { font-size: 12pt; font-weight: 700; font-style: italic; line-height: 1.1; }
+.ps-sch-tag{ font-size: 7pt; font-style: italic; color: #444; }
+.ps-sch-ct { font-size: 6.5pt; color: #444; margin-top: 0.5mm; }
+.ps-btitle { font-size: 9pt; font-weight: 900; text-transform: uppercase; text-decoration: underline; margin: 1.5mm 0 0.5mm; }
+.ps-bperiod{ font-size: 8pt; font-weight: 700; margin-bottom: 2mm; }
+.ps-gs-ttl { font-size: 16pt; font-weight: 900; font-family: 'Palatino Linotype','Book Antiqua',Palatino,serif;
+             text-transform: uppercase; letter-spacing: 2px; text-align: center; margin: 2mm 0; }
+.ps-cbox   { border: 2px solid #6B5000; border-radius: 8px; width: 100%; height: 42mm;
+             display: flex; align-items: center; justify-content: center;
+             background: linear-gradient(135deg,#e8f4f0,#d4e8f5,#f5e8d4,#e8f0d4); margin-bottom: 2.5mm; }
+.ps-info   { border: 2px solid #6B5000; border-radius: 8px; padding: 2.5mm 3.5mm; width: 100%; font-size: 8pt; line-height: 1.75; background: #fff; }
+.ps-ir     { display: flex; }
+.ps-il     { min-width: 38mm; }
+.ps-iv     { font-weight: 700; }
+
+.ps-intro  { font-size: 7pt; line-height: 1.55; text-align: justify; margin-bottom: 1.5mm; }
+.ps-ibold  { font-weight: 700; text-decoration: underline; }
+.ps-leg-t  { border-collapse: collapse; margin: 2mm 0; font-size: 7.5pt; width: 90%; }
+.ps-leg-t td { border: 1px solid #000; padding: 1mm 3mm; }
+.ps-leg-t td:first-child { font-weight: 900; text-align: center; width: 12mm; }
+.ps-cm-lbl { font-size: 8pt; font-weight: 700; margin-top: 3mm; margin-bottom: 1.5mm; border-top: 1.5px solid #6B5000; padding-top: 2mm; }
+.ps-cm-box { border: 1px solid #6B5000; border-radius: 4px; padding: 2mm 3mm; min-height: 18mm; font-size: 7.5pt; font-style: italic; background: #fffdf8; margin-bottom: 3mm; }
+.ps-sig-t  { width: 100%; border-collapse: collapse; font-size: 7.5pt; }
+.ps-sig-t td, .ps-sig-t th { border: 1px solid #000; padding: 1.2mm 2mm; vertical-align: middle; }
+.ps-sig-dr td { background: #FFC000; font-weight: 700; text-decoration: underline; font-size: 8pt; padding: 1.2mm 2mm; }
+.ps-sig-hr th { background: #FCE9D9; font-weight: 700; text-align: center; width: 33.3%; font-size: 7.5pt; }
+.ps-sig-br td { background: #FCE9D9; height: 22mm; width: 33.3%; }
+
+.ps-comp   { width: 100%; border-collapse: collapse; font-size: 6.5pt; }
+.ps-comp th, .ps-comp td { border: 1px solid #000; vertical-align: middle; padding: 0.7mm 1.2mm; }
+.ps-hd     { background: #C2D59B; font-weight: 700; text-align: center; font-size: 7pt; }
+.ps-sub-h  { background: #C2D59B; font-weight: 700; text-align: center; font-size: 6.5pt; padding: 0.5mm; }
+.ps-sep    { background: #FFC000; height: 3px; padding: 0; border: 1px solid #6B5000; }
+.ps-dom-c  { font-weight: 900; text-align: center; vertical-align: middle; font-size: 6.5pt; text-transform: uppercase; word-break: break-word; }
+.ps-comp-c { font-size: 6.5pt; }
+.ps-score  { text-align: center; font-weight: 700; font-size: 7pt; }
 </style>
 
 <div class="ps-wrap">
@@ -721,81 +691,93 @@ $_psTeacherName = $student->classroom->teacher?->name ?? '—';
      ══════════════════════════════════════════════════════════════ --}}
 
 <style>
-@page { size: A4 landscape; margin: 0; }
-@media print { body { background:#fff; } .bk-wrap { padding:0; gap:0; } .bk-no-print { display:none !important; } }
+/* ── Reset & page setup ── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-*, *::before, *::after { box-sizing: border-box; }
-.bk-wrap  { display:flex; flex-direction:column; align-items:center; gap:6mm; padding:6mm; }
-.bk-page  { width:297mm; height:210mm; display:flex; flex-direction:row; background:#fff;
-            page-break-after:always; overflow:hidden; font-size:7pt; color:#000;
-            font-family:Arial,sans-serif; box-shadow:0 3px 14px rgba(0,0,0,.3); }
-.bk-panel { width:148.5mm; height:210mm; padding:4mm 5mm; overflow:hidden; position:relative; }
-.bk-left  { border-right:1.5px solid #000; }
+@media print {
+    @page { size: A4 landscape; margin: 0; }
+    html, body { width: 297mm; height: 210mm; background: #fff; }
+    .bk-no-print { display: none !important; }
+    .bk-wrap { padding: 0; gap: 0; background: #fff; }
+    .bk-page { box-shadow: none; page-break-after: always; }
+    .bk-page:last-child { page-break-after: avoid; }
+}
 
-.bk-pbar { display:flex; justify-content:space-between; align-items:baseline;
-           border-bottom:1.5px solid #000; padding-bottom:1mm; margin-bottom:1mm; }
-.bk-pbar span { font-size:7.5pt; font-weight:700; text-transform:uppercase; }
+@media screen {
+    @page { size: A4 landscape; margin: 0; }
+    body { background: #e5e7eb; }
+}
 
-.bk-sl { font-size:7pt; font-weight:700; text-transform:uppercase; margin:1.5mm 0 0.6mm; }
+.bk-wrap  { display: flex; flex-direction: column; align-items: center; gap: 6mm; padding: 6mm; }
+.bk-page  { width: 297mm; height: 210mm; display: flex; flex-direction: row; background: #fff;
+            overflow: hidden; font-size: 7pt; color: #000;
+            font-family: Arial, sans-serif; box-shadow: 0 3px 14px rgba(0,0,0,.3); }
+.bk-panel { width: 148.5mm; height: 210mm; padding: 4mm 5mm; overflow: hidden; position: relative; }
+.bk-left  { border-right: 1.5px solid #000; }
 
-.bk-ph { width:100%; border-collapse:collapse; table-layout:fixed; }
-.bk-ph th { border:1px solid #000; font-size:6.5pt; font-weight:700; text-align:center; padding:0.5mm; }
-.bk-ph .ph-blank { width:52%; background:#fff; border:none; border-right:1px solid #000; }
-.bk-ph .ph-top   { background:#A6A6A6; }
-.bk-ph .ph-sub   { background:#D9D9D9; font-size:6pt; }
+.bk-pbar { display: flex; justify-content: space-between; align-items: baseline;
+           border-bottom: 1.5px solid #000; padding-bottom: 1mm; margin-bottom: 1mm; }
+.bk-pbar span { font-size: 7.5pt; font-weight: 700; text-transform: uppercase; }
 
-.bk-gt { width:100%; border-collapse:collapse; margin-bottom:0.4mm; table-layout:fixed; }
-.bk-gt td { border:1px solid #000; vertical-align:middle; padding:0.4mm 1.2mm; font-size:7pt; background:#fff; line-height:1.2; }
-.bk-gt tbody tr:nth-child(even) td { background:#BFBFBF; }
-.bk-cb  { width:52%; }
-.bk-p   { width:6.7%; text-align:center; font-weight:700; }
-.bk-aen { width:5%;   text-align:center; }
+.bk-sl { font-size: 7pt; font-weight: 700; text-transform: uppercase; margin: 1.5mm 0 0.6mm; }
 
-.bk-tt { width:100%; border-collapse:collapse; margin-top:1.2mm; table-layout:fixed; }
-.bk-tt td { border:1px solid #000; padding:0.8mm 1.5mm; font-size:7.5pt; background:#fff; text-align:center; }
-.bk-tt .lbl { text-align:left; font-weight:700; background:#D9D9D9; width:40%; }
-.bk-tt .big { font-size:9pt; font-weight:700; }
+.bk-ph { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.bk-ph th { border: 1px solid #000; font-size: 6.5pt; font-weight: 700; text-align: center; padding: 0.5mm; }
+.bk-ph .ph-blank { width: 52%; background: #fff; border: none; border-right: 1px solid #000; }
+.bk-ph .ph-top   { background: #A6A6A6; }
+.bk-ph .ph-sub   { background: #D9D9D9; font-size: 6pt; }
 
-.bk-leg { width:100%; border-collapse:collapse; margin-top:1.2mm; font-size:6.5pt; }
-.bk-leg th { border:1px solid #000; padding:0.6mm 0.8mm; font-weight:700; text-align:center; background:#A6A6A6; }
-.bk-leg th.lh { text-align:left; }
-.bk-leg td { border:1px solid #000; padding:0.6mm 0.8mm; text-align:center; background:#fff; }
-.bk-leg td.lbl { text-align:left; font-weight:700; background:#D9D9D9; }
+.bk-gt { width: 100%; border-collapse: collapse; margin-bottom: 0.4mm; table-layout: fixed; }
+.bk-gt td { border: 1px solid #000; vertical-align: middle; padding: 0.4mm 1.2mm; font-size: 7pt; background: #fff; line-height: 1.2; }
+.bk-gt tbody tr:nth-child(even) td { background: #BFBFBF; }
+.bk-cb  { width: 52%; }
+.bk-p   { width: 6.7%; text-align: center; font-weight: 700; }
+.bk-aen { width: 5%;   text-align: center; }
 
-.bk-at { width:100%; border-collapse:collapse; font-size:7pt; }
-.bk-at th { border:1px solid #000; background:#A6A6A6; font-weight:700; text-align:center; padding:0.8mm 1.2mm; }
-.bk-at th.title { background:#D9D9D9; font-size:8.5pt; }
-.bk-at td { border:1px solid #000; padding:1.2mm 1.5mm; vertical-align:top; background:#fff; }
-.bk-at .per { text-align:center; font-weight:700; width:13%; vertical-align:middle; background:#D9D9D9; }
-.bk-at .obs { width:43%; }
-.bk-at .sig { width:22%; text-align:center; vertical-align:bottom; font-size:6pt; color:#444; }
-.bk-sline   { display:block; border-bottom:1px solid #555; margin:6mm auto 0.8mm; width:75%; }
+.bk-tt { width: 100%; border-collapse: collapse; margin-top: 1.2mm; table-layout: fixed; }
+.bk-tt td { border: 1px solid #000; padding: 0.8mm 1.5mm; font-size: 7.5pt; background: #fff; text-align: center; }
+.bk-tt .lbl { text-align: left; font-weight: 700; background: #D9D9D9; width: 40%; }
+.bk-tt .big { font-size: 9pt; font-weight: 700; }
 
-.bk-tft { width:62%; border-collapse:collapse; margin:1mm 0 1mm 4mm; font-size:7pt; }
-.bk-tft td { border:1px solid #000; padding:1mm 1.5mm; background:#fff; }
-.bk-tft td:first-child { font-weight:700; }
-.bk-tft td:last-child  { width:36%; }
+.bk-leg { width: 100%; border-collapse: collapse; margin-top: 1.2mm; font-size: 6.5pt; }
+.bk-leg th { border: 1px solid #000; padding: 0.6mm 0.8mm; font-weight: 700; text-align: center; background: #A6A6A6; }
+.bk-leg th.lh { text-align: left; }
+.bk-leg td { border: 1px solid #000; padding: 0.6mm 0.8mm; text-align: center; background: #fff; }
+.bk-leg td.lbl { text-align: left; font-weight: 700; background: #D9D9D9; }
 
-.bk-dec { border:1.5px solid #000; margin-top:1.5mm; }
-.bk-chk { width:3mm; height:3mm; border:1.5px solid #000; display:inline-block; flex-shrink:0; }
+.bk-at { width: 100%; border-collapse: collapse; font-size: 7pt; }
+.bk-at th { border: 1px solid #000; background: #A6A6A6; font-weight: 700; text-align: center; padding: 0.8mm 1.2mm; }
+.bk-at th.title { background: #D9D9D9; font-size: 8.5pt; }
+.bk-at td { border: 1px solid #000; padding: 1.2mm 1.5mm; vertical-align: top; background: #fff; }
+.bk-at .per { text-align: center; font-weight: 700; width: 13%; vertical-align: middle; background: #D9D9D9; }
+.bk-at .obs { width: 43%; }
+.bk-at .sig { width: 22%; text-align: center; vertical-align: bottom; font-size: 6pt; color: #444; }
+.bk-sline   { display: block; border-bottom: 1px solid #555; margin: 6mm auto 0.8mm; width: 75%; }
 
-.bk-cover { display:flex; flex-direction:column; align-items:center; }
-.bk-republic { font-size:7.5pt; font-weight:700; text-transform:uppercase; letter-spacing:1px; margin-bottom:2mm; text-align:center; }
-.bk-cov-school  { font-size:10.5pt; font-weight:900; text-transform:uppercase; text-align:center; margin-bottom:1mm; }
-.bk-cov-carnet  { font-size:12pt; font-weight:400; text-align:center; margin:0.8mm 0; }
-.bk-cov-classe  { font-size:17pt; font-weight:900; text-align:center; margin-bottom:2.5mm; }
-.bk-infobox { border:2.5px solid #000; border-radius:8px; padding:2.5mm 4mm; width:100%;
-              font-size:8pt; background:#fff; line-height:1.85; }
-.bk-infobox .ir { display:flex; }
-.bk-infobox .il { flex-shrink:0; min-width:36mm; }
-.bk-infobox .iv { font-weight:700; }
+.bk-tft { width: 62%; border-collapse: collapse; margin: 1mm 0 1mm 4mm; font-size: 7pt; }
+.bk-tft td { border: 1px solid #000; padding: 1mm 1.5mm; background: #fff; }
+.bk-tft td:first-child { font-weight: 700; }
+.bk-tft td:last-child  { width: 36%; }
+
+.bk-dec { border: 1.5px solid #000; margin-top: 1.5mm; }
+.bk-chk { width: 3mm; height: 3mm; border: 1.5px solid #000; display: inline-block; flex-shrink: 0; }
+
+.bk-cover { display: flex; flex-direction: column; align-items: center; }
+.bk-republic { font-size: 7.5pt; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 2mm; text-align: center; }
+.bk-cov-school  { font-size: 10.5pt; font-weight: 900; text-transform: uppercase; text-align: center; margin-bottom: 1mm; }
+.bk-cov-carnet  { font-size: 12pt; font-weight: 400; text-align: center; margin: 0.8mm 0; }
+.bk-cov-classe  { font-size: 17pt; font-weight: 900; text-align: center; margin-bottom: 2.5mm; }
+.bk-infobox { border: 2.5px solid #000; border-radius: 8px; padding: 2.5mm 4mm; width: 100%;
+              font-size: 8pt; background: #fff; line-height: 1.85; }
+.bk-infobox .ir { display: flex; }
+.bk-infobox .il { flex-shrink: 0; min-width: 36mm; }
+.bk-infobox .iv { font-weight: 700; }
 </style>
 
 @php
 $splitAt       = (int) ceil($subjects->count() / 2);
 $subjectsLeft  = $subjects->take($splitAt);
 $subjectsRight = $subjects->skip($splitAt)->values();
-$directorName  = \App\Models\SchoolSetting::get('director_name', '—');
 $schoolName    = \App\Models\SchoolSetting::get('school_name', 'ECOLE PRIVEE INTEC');
 $nextClassCode = \App\Models\StudentPromotion::nextClassCode($classCode);
 @endphp
@@ -850,8 +832,6 @@ $nextClassCode = \App\Models\StudentPromotion::nextClassCode($classCode);
                 <tr>
                     <td class="per">{!! $num !!}<br><strong>{{ $lbl }}</strong></td>
                     <td class="obs">
-                        {{-- Whatever observation was entered/imported (teacher_comment first,
-                             then direction_comment, then legacy appreciation). --}}
                         @if($periodTotals[$p]['observation'])
                             {{ $periodTotals[$p]['observation'] }}<br><br>
                         @else
@@ -1014,7 +994,6 @@ $nextClassCode = \App\Models\StudentPromotion::nextClassCode($classCode);
             <span style="font-size:7.5pt;text-transform:none;">Année scolaire : {{ $yearLabel }}</span>
         </div>
 
-        {{-- Scrollable/clippable middle: subjects + DIM PERS + totals. --}}
         <div style="flex:1 1 auto;min-height:0;overflow:hidden;">
 
         @foreach($subjectsRight as $ridx => $subject)
@@ -1055,12 +1034,8 @@ $nextClassCode = \App\Models\StudentPromotion::nextClassCode($classCode);
         </table>
         @endforeach
 
-        {{-- DIMENSION PERSONNELLE — single discipline row.
-             Renders bulletin->discipline_status verbatim from the DB
-             (whatever was entered in saisir or imported from Excel). --}}
-        @php
-            $_dimIdx = ($splitAt + $subjectsRight->count());
-        @endphp
+        {{-- DIMENSION PERSONNELLE --}}
+        @php $_dimIdx = ($splitAt + $subjectsRight->count()); @endphp
         <p class="bk-sl">{{ $romanNumerals[$_dimIdx] ?? ($_dimIdx + 1) }} – DIMENSION PERSONNELLE : Appréciation</p>
         <table class="bk-gt">
             <colgroup>
@@ -1081,13 +1056,9 @@ $nextClassCode = \App\Models\StudentPromotion::nextClassCode($classCode);
             </tbody>
         </table>
 
-        </div>{{-- /middle scrollable area --}}
+        </div>{{-- /middle --}}
 
-        {{-- TOTAUX / MOYENNES + DIM. PERS. — anchored at panel bottom.
-             EVERY value here is read DIRECTLY from the DB (total_manuel,
-             moyenne_10, moyenne_classe, discipline_status). No computation,
-             no conversion — what the teacher saved in saisir or imported
-             from Excel is what gets printed. Period. --}}
+        {{-- TOTAUX / MOYENNES --}}
         <table class="bk-tt" style="flex-shrink:0;margin-top:auto;">
             <colgroup>
                 <col style="width:40%"><col style="width:20%"><col style="width:20%"><col style="width:20%">
