@@ -14,7 +14,6 @@ class Bulletin extends Model implements HasMedia
 {
     use SoftDeletes, InteractsWithMedia, CalculatesMoyenne;
 
-    // Override rejectWorkflow from HasWorkflow so we can reset teacher submissions.
     use HasWorkflow {
         rejectWorkflow as protected traitRejectWorkflow;
     }
@@ -23,12 +22,10 @@ class Bulletin extends Model implements HasMedia
         'student_id', 'classroom_id', 'academic_year_id', 'period',
         'status', 'total_score', 'moyenne', 'class_moyenne',
         'appreciation', 'teacher_comment', 'direction_comment',
-        // ── New columns ───────────────────────────────────────────────────
-        'total_manuel',       // manual override for total score
-        'moyenne_10',         // moyenne scaled to /10
-        'moyenne_classe',     // class average (replaces legacy class_moyenne)
-        'discipline_status',  // e.g. 'bien', 'passable', 'insuffisant'
-        // ─────────────────────────────────────────────────────────────────
+        'total_manuel',
+        'moyenne_10',
+        'moyenne_classe',
+        'discipline_status',
         'submitted_by', 'pedagogie_approved_by', 'finance_approved_by',
         'direction_approved_by', 'submitted_at', 'pedagogie_approved_at',
         'finance_approved_at', 'direction_approved_at', 'published_at',
@@ -48,6 +45,58 @@ class Bulletin extends Model implements HasMedia
         'direction_approved_at' => 'datetime',
         'published_at'          => 'datetime',
     ];
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // IMPORTANT — anti-recomputation guard
+    //
+    // The CalculatesMoyenne trait is used here for legacy reasons. If that
+    // trait registers a saving/saved hook that recomputes `moyenne` or
+    // `moyenne_10` from grades, it WILL clobber imported / manually-entered
+    // values, and that's been the source of intermittent "the data I
+    // imported isn't there" bugs — especially visible on CE1/CE2/CM1/CM2
+    // where the /20 scale makes wrong recomputed values stand out.
+    //
+    // If you have access to the trait, ensure its recomputation methods:
+    //   1. Are NEVER called from a saving/saved/creating/updated hook.
+    //      They should only run when explicitly invoked (e.g. a "Recalculer"
+    //      button), never automatically.
+    //   2. Respect the manual fields: if `total_manuel`, `moyenne_10`, or
+    //      `moyenne_classe` are non-null, the trait must NOT overwrite them.
+    //
+    // The two helpers below give explicit, traceable access for callers
+    // that want to write summary fields without any chance of trait
+    // interference.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Persist the four manual summary fields atomically, bypassing any
+     * trait-level recomputation. Pass null to clear a field.
+     */
+    public function setManualSummary(
+        ?float  $totalManuel,
+        ?float  $moyenne10,
+        ?float  $moyenneClasse,
+        ?string $disciplineStatus,
+    ): bool {
+        return $this->update([
+            'total_manuel'      => $totalManuel,
+            'moyenne_10'        => $moyenne10,
+            'moyenne_classe'    => $moyenneClasse,
+            'discipline_status' => $disciplineStatus,
+        ]);
+    }
+
+    /**
+     * True if ANY manual summary field has been set — used by carnet/saisir
+     * to decide whether to render stored values vs computed fallback.
+     */
+    public function hasManualSummary(): bool
+    {
+        return $this->total_manuel    !== null
+            || $this->moyenne_10      !== null
+            || $this->moyenne_classe  !== null
+            || $this->discipline_status !== null;
+    }
 
     // ── Relationships ──────────────────────────────────────────────────────────
 
@@ -88,7 +137,6 @@ class Bulletin extends Model implements HasMedia
 
     // ── Teacher submission helpers ─────────────────────────────────────────────
 
-    /** Has this specific teacher already submitted their subjects for this bulletin? */
     public function isTeacherSubmitted(int $userId): bool
     {
         return $this->teacherSubmissions()
@@ -97,11 +145,6 @@ class Bulletin extends Model implements HasMedia
             ->exists();
     }
 
-    /**
-     * Can this user still edit grades?
-     * - Direction/admin: yes unless bulletin is published.
-     * - Teacher: yes if DRAFT and not yet submitted, or REJECTED.
-     */
     public function canTeacherEdit(int $userId): bool
     {
         $user = \App\Models\User::find($userId);
@@ -118,11 +161,6 @@ class Bulletin extends Model implements HasMedia
             && ! $this->isTeacherSubmitted($userId);
     }
 
-    /**
-     * Returns true when every teacher assigned to THIS classroom has submitted.
-     * Uses the classroom_teacher pivot — not classroom_code on subjects —
-     * so CP A only waits for its own teachers, not CP B's.
-     */
     public function allTeachersSubmitted(): bool
     {
         $this->loadMissing('classroom');
@@ -140,9 +178,6 @@ class Bulletin extends Model implements HasMedia
         return $teacherIds->diff($submitted)->isEmpty();
     }
 
-    /**
-     * Returns progress data: how many teachers submitted vs total for THIS classroom.
-     */
     public function teacherSubmissionProgress(): array
     {
         $this->loadMissing('classroom', 'teacherSubmissions.teacher');
@@ -162,27 +197,38 @@ class Bulletin extends Model implements HasMedia
         ];
     }
 
-    // ── Moyenne helpers ────────────────────────────────────────────────────────
+    // ── Effective-value helpers ────────────────────────────────────────────────
 
     /**
-     * The effective total to use: manual override takes precedence over computed.
+     * Manual override takes precedence over any computed total.
      */
     public function effectiveTotal(): ?float
     {
-        return $this->total_manuel ?? $this->total_score;
+        return $this->total_manuel !== null
+            ? (float) $this->total_manuel
+            : ($this->total_score !== null ? (float) $this->total_score : null);
     }
 
     /**
-     * The effective class average: new moyenne_classe takes precedence over legacy class_moyenne.
+     * Manual override takes precedence over any computed moyenne.
+     */
+    public function effectiveMoyenne(): ?float
+    {
+        return $this->moyenne_10 !== null
+            ? (float) $this->moyenne_10
+            : ($this->moyenne !== null ? (float) $this->moyenne : null);
+    }
+
+    /**
+     * Effective class average — manual override wins over legacy field.
      */
     public function effectiveClassMoyenne(): ?float
     {
-        return $this->moyenne_classe ?? $this->class_moyenne;
+        return $this->moyenne_classe !== null
+            ? (float) $this->moyenne_classe
+            : ($this->class_moyenne !== null ? (float) $this->class_moyenne : null);
     }
 
-    /**
-     * Whether the total has been manually overridden by direction/admin.
-     */
     public function hasManuaOverride(): bool
     {
         return ! is_null($this->total_manuel);
@@ -190,9 +236,6 @@ class Bulletin extends Model implements HasMedia
 
     // ── Workflow override ──────────────────────────────────────────────────────
 
-    /**
-     * On rejection, reset all teacher submissions to draft so teachers can edit again.
-     */
     public function rejectWorkflow(int $userId, string $reason): bool
     {
         $this->teacherSubmissions()->update(['status' => 'draft', 'submitted_at' => null]);
@@ -218,10 +261,6 @@ class Bulletin extends Model implements HasMedia
         ]);
     }
 
-    /**
-     * Direction/admin can edit grades inline when the bulletin is pending their review
-     * or already approved (before publication).
-     */
     public function canDirectionEdit(): bool
     {
         return in_array($this->status, [

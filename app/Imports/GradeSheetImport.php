@@ -21,24 +21,19 @@ use Maatwebsite\Excel\Concerns\WithStartRow;
  * Round-trip safe importer paired with GradeSheetExport.
  *
  * Philosophy: NO computation. Whatever value is in a cell is stored as-is,
- * subject only to a niveau-aware range check on the three summary fields
- * (total, moyenne, moyenne_classe) to prevent DB overflow. Grade scores
- * themselves are NEVER bounded — they are stored exactly as entered.
+ * subject only to niveau-aware bounds on the THREE summary fields
+ * (total_manuel, moyenne_10, moyenne_classe). Grade scores are never bounded.
  *
- * Header detection is permissive — many label variants are accepted:
- *   "Total sur 200", "Total /200", "Total" → totalCol
- *   "Moyenne sur 20", "Moyenne /20", "Moy 20", "Moy./20" → moy10Col
- *   "Moyenne de la classe sur 20", "Moy. classe /20", "Moy classe" → moyClasseCol
- *   "DISCIPLINE", row3 cell "DIM. PERS." → disciplineCol
- *   "Commentaire", "Observations", row3 cell "OBSERVATIONS" → observationsCol
- *
- * Empty cells in detected summary columns store NULL — this lets a teacher
- * blank a value via Excel and have the carnet reflect it.
- *
- * Column order produced by the export (the importer accepts any order):
- *   Matricule | Nom Complet | Date Naissance | <competences…>
- *   | Total sur N | Moyenne sur M | Moyenne de la classe sur M
- *   | DISCIPLINE | Commentaire
+ * KEY CHANGE vs the previous version:
+ *   - Bounds failures on summary fields no longer abort the whole row.
+ *     They now skip the offending field, save everything else, and
+ *     surface the problem in $this->errors. Previously, one bad summary
+ *     value silently wiped all grades for that student.
+ *   - Per-row debug log shows exactly which fields were detected, parsed,
+ *     and written — so you can confirm CE1/CE2/CM1/CM2 imports are
+ *     actually persisting.
+ *   - Bounds are slightly looser (200.5 instead of 200.01) to tolerate
+ *     a teacher who enters 200.0 plus a hair of rounding noise.
  */
 class GradeSheetImport implements ToArray, WithStartRow
 {
@@ -115,6 +110,9 @@ class GradeSheetImport implements ToArray, WithStartRow
             'classroom_id'      => $this->classroomId,
             'section_code'      => $sectionCode,
             'level_code'        => $levelCode,
+            'niveau_code'       => $this->niveauCode,
+            'resolved_key'      => $this->resolvedNiveauKey(),
+            'bounds'            => $this->summaryBounds(),
             'subjects_count'    => $this->subjects->count(),
             'competences_count' => count($this->competenceMap),
             'teacher_id'        => $this->teacherId,
@@ -133,17 +131,21 @@ class GradeSheetImport implements ToArray, WithStartRow
 
     /**
      * Niveau-aware bounds for the three summary fields (NOT for grades).
-     * Generous fallback for unknown niveaux to avoid false rejections.
+     *
+     * NB the `+0.5` tolerance below: the DB columns are decimal(6,2) and
+     * decimal(4,2), so 200.00 / 20.00 fit cleanly. The tolerance lets
+     * teachers enter `200` exactly without floating-point comparison
+     * weirdness rejecting it.
      */
     private function summaryBounds(): array
     {
         $key = $this->resolvedNiveauKey();
 
         if ($key === 'CP') {
-            return ['total_max' => 140, 'moy_max' => 10, 'moy_cls_max' => 10];
+            return ['total_max' => 140.5, 'moy_max' => 10.5, 'moy_cls_max' => 10.5];
         }
         if (in_array($key, ['CE1', 'CE2', 'CM1', 'CM2'], true)) {
-            return ['total_max' => 200, 'moy_max' => 20, 'moy_cls_max' => 20];
+            return ['total_max' => 200.5, 'moy_max' => 20.5, 'moy_cls_max' => 20.5];
         }
         return ['total_max' => 9999, 'moy_max' => 9999, 'moy_cls_max' => 9999];
     }
@@ -225,8 +227,6 @@ class GradeSheetImport implements ToArray, WithStartRow
 
     private function buildColumnMap(array $subjectRow, array $codeRow): void
     {
-        // Labels in row 3 that are NOT subject names (so they shouldn't
-        // propagate as a "current subject" rightward).
         $nonSubjectLabels = [
             'matricule', 'nom complet', 'nom', 'prénom', 'prenom',
             'date naissance', 'date de naissance',
@@ -236,9 +236,6 @@ class GradeSheetImport implements ToArray, WithStartRow
             '',
         ];
 
-        // Propagate subject names rightward across merged blank cells in
-        // the subject row (row 3). Many spreadsheets read merged cells as
-        // a value in the first cell only and blanks afterward.
         $currentSubject = null;
         $subjectForCol  = [];
 
@@ -247,9 +244,6 @@ class GradeSheetImport implements ToArray, WithStartRow
             $lower   = strtolower($trimmed);
 
             if ($trimmed !== '' && !in_array($lower, $nonSubjectLabels, true)) {
-                // Strip a trailing "/N" from the subject name (we add it on export
-                // for visual reference, but the canonical subject name is stored
-                // without it in the DB).
                 $cleaned        = preg_replace('#\s*/\s*\d+\s*$#u', '', $trimmed);
                 $currentSubject = trim($cleaned);
             } elseif ($trimmed !== '' && in_array($lower, $nonSubjectLabels, true)) {
@@ -272,12 +266,7 @@ class GradeSheetImport implements ToArray, WithStartRow
             $subjectRowVal = strtolower(trim((string) ($subjectRow[$col] ?? '')));
             $subjectFor    = $subjectForCol[$col] ?? null;
 
-            // ── Manual summary column detection ────────────────────────────
-            // ORDER MATTERS: "Moyenne de la classe" MUST be checked BEFORE
-            // generic "Moyenne", and total last of the three. Patterns are
-            // permissive — they accept "sur N", "/N", trailing punctuation, etc.
-
-            // 1) MOYENNE DE LA CLASSE
+            // 1) MOYENNE DE LA CLASSE — must be checked BEFORE generic moyenne
             if (preg_match('/moyenne\s+de\s+la\s+classe/i', $rawLabel)
                 || preg_match('/moy(?:enne)?\.?\s+(?:de\s+la\s+)?classe/i', $rawLabel)
                 || str_contains($lowerLabel, 'moyenne classe')
@@ -288,7 +277,6 @@ class GradeSheetImport implements ToArray, WithStartRow
             }
 
             // 2) MOYENNE (without "classe")
-            // Matches: "Moyenne sur 20", "Moyenne /20", "Moy./20", "Moyenne 10", "Moy 20"
             if (preg_match('/^moy(?:enne)?\.?\s*(?:sur\s+|\/\s*)?\d*\s*$/i', $rawLabel)
                 || preg_match('/^moyenne\s+sur\s+\d+/i', $rawLabel)
                 || preg_match('/^moy\.?\s*\/\s*\d+/i', $rawLabel)
@@ -300,7 +288,6 @@ class GradeSheetImport implements ToArray, WithStartRow
             }
 
             // 3) TOTAL
-            // Matches: "Total sur 200", "Total /200", "Total"
             if (preg_match('/^total\s*(?:sur\s+|\/\s*)?\d*\s*$/i', $rawLabel)
                 || str_contains($lowerLabel, 'total sur')
                 || str_contains($lowerLabel, 'total /')
@@ -332,8 +319,6 @@ class GradeSheetImport implements ToArray, WithStartRow
             // ── Competence mapping ─────────────────────────────────────────
             if ($rawLabel === '' || $subjectFor === null) continue;
 
-            // The export writes labels like "CB1 / Description /20".
-            // The canonical code is everything before the first " / ".
             $code = $rawLabel;
             if (str_contains($rawLabel, '/')) {
                 $code = trim(explode('/', $rawLabel)[0]);
@@ -364,6 +349,15 @@ class GradeSheetImport implements ToArray, WithStartRow
 
     // ── Row processing ───────────────────────────────────────────────────────
 
+    /**
+     * Process a single student row.
+     *
+     * NEW BEHAVIOUR: bounds failures on summary fields no longer roll back
+     * the whole row. They record the error in $this->errors, skip that
+     * field's write, and save everything else (grades + valid summary
+     * fields + discipline + observations). This way a single typo in one
+     * summary cell can't silently destroy the student's grades.
+     */
     private function processRow(array $row, int $rowNumber): void
     {
         $matricule = trim((string) ($row[0] ?? ''));
@@ -385,9 +379,6 @@ class GradeSheetImport implements ToArray, WithStartRow
             $gradesProcessed = 0;
 
             // ── Competence grades ───────────────────────────────────────────
-            // No max_score bounds check — store exactly what was entered.
-            // Empty cells skip (keeping any existing value); non-empty cells
-            // overwrite via updateOrCreate.
             foreach ($this->columnMap as $colIndex => $compositeKey) {
                 $rawValue = $row[$colIndex] ?? null;
                 $trimmed  = trim((string) $rawValue);
@@ -399,8 +390,6 @@ class GradeSheetImport implements ToArray, WithStartRow
                 if ($competence->subject->scale_type === 'competence') {
                     $this->saveCompetenceStatus($bulletin, $competence, $rawValue);
                 } else {
-                    // Numeric subjects accept either a number OR an A/EVA/NA
-                    // status (some teachers use status for special cases).
                     $upperTrimmed = strtoupper($trimmed);
                     if (in_array($upperTrimmed, ['A', 'EVA', 'NA'], true)) {
                         $this->saveCompetenceStatus($bulletin, $competence, $upperTrimmed);
@@ -412,54 +401,66 @@ class GradeSheetImport implements ToArray, WithStartRow
             }
 
             // ── Manual summary fields ───────────────────────────────────────
-            // KEY DECISION: when a summary column IS detected in the file,
-            // the cell's value (including blank) is written to the DB.
-            // This lets a teacher clear a value via Excel by emptying its cell.
-            //
-            // When a summary column is NOT detected (e.g. teacher's export
-            // doesn't include those columns), the existing DB value is left
-            // untouched — no $updates entry is added for that field.
+            // Bounds failures here no longer kill the row — they skip the
+            // offending field and continue.
             $bounds  = $this->summaryBounds();
             $updates = [];
+            $summaryDebug = [];
 
+            // ─── Total ─────────────────────────────────────────────────────
             if ($this->totalCol !== null) {
-                $val = $this->parseNumeric($row[$this->totalCol] ?? null);
-                if ($val !== null && $val > $bounds['total_max'] + 0.01) {
-                    throw new \InvalidArgumentException(
-                        "Total {$val} dépasse le maximum {$bounds['total_max']} pour ce niveau"
-                    );
+                $rawCell = $row[$this->totalCol] ?? null;
+                $val     = $this->parseNumeric($rawCell);
+                if ($val !== null && $val > $bounds['total_max']) {
+                    $this->errors[] = "Ligne {$rowNumber}: total {$val} > {$bounds['total_max']} ignoré";
+                    $summaryDebug['total_manuel'] = "REJECTED ({$val} > {$bounds['total_max']})";
+                } else {
+                    $updates['total_manuel'] = $val;
+                    $summaryDebug['total_manuel'] = $val ?? 'null';
                 }
-                $updates['total_manuel'] = $val;
             }
+
+            // ─── Moyenne ───────────────────────────────────────────────────
             if ($this->moy10Col !== null) {
-                $val = $this->parseNumeric($row[$this->moy10Col] ?? null);
-                if ($val !== null && $val > $bounds['moy_max'] + 0.01) {
-                    throw new \InvalidArgumentException(
-                        "Moyenne {$val} dépasse le maximum {$bounds['moy_max']} pour ce niveau"
-                    );
+                $rawCell = $row[$this->moy10Col] ?? null;
+                $val     = $this->parseNumeric($rawCell);
+                if ($val !== null && $val > $bounds['moy_max']) {
+                    $this->errors[] = "Ligne {$rowNumber}: moyenne {$val} > {$bounds['moy_max']} ignorée";
+                    $summaryDebug['moyenne_10'] = "REJECTED ({$val} > {$bounds['moy_max']})";
+                } else {
+                    $updates['moyenne_10'] = $val;
+                    $summaryDebug['moyenne_10'] = $val ?? 'null';
                 }
-                $updates['moyenne_10'] = $val;
             }
+
+            // ─── Moyenne de la classe ─────────────────────────────────────
             if ($this->moyClasseCol !== null) {
-                $val = $this->parseNumeric($row[$this->moyClasseCol] ?? null);
-                if ($val !== null && $val > $bounds['moy_cls_max'] + 0.01) {
-                    throw new \InvalidArgumentException(
-                        "Moyenne classe {$val} dépasse le maximum {$bounds['moy_cls_max']} pour ce niveau"
-                    );
+                $rawCell = $row[$this->moyClasseCol] ?? null;
+                $val     = $this->parseNumeric($rawCell);
+                if ($val !== null && $val > $bounds['moy_cls_max']) {
+                    $this->errors[] = "Ligne {$rowNumber}: moyenne classe {$val} > {$bounds['moy_cls_max']} ignorée";
+                    $summaryDebug['moyenne_classe'] = "REJECTED ({$val} > {$bounds['moy_cls_max']})";
+                } else {
+                    $updates['moyenne_classe'] = $val;
+                    $summaryDebug['moyenne_classe'] = $val ?? 'null';
                 }
-                $updates['moyenne_classe'] = $val;
             }
+
+            // ─── Discipline (text) ────────────────────────────────────────
             if ($this->disciplineCol !== null) {
                 $val = trim((string) ($row[$this->disciplineCol] ?? ''));
                 $updates['discipline_status'] = $val !== '' ? $val : null;
+                $summaryDebug['discipline_status'] = $updates['discipline_status'] ?? 'null';
             }
+
+            // ─── Observations (text) ──────────────────────────────────────
             if ($this->observationsCol !== null) {
                 $val   = trim((string) ($row[$this->observationsCol] ?? ''));
                 $lower = strtolower($val);
-                // Guard against accidentally importing the header label as a value.
                 $updates['teacher_comment'] = ($val !== '' && !in_array($lower, ['observations', 'commentaire', 'observation'], true))
                     ? $val
                     : null;
+                $summaryDebug['teacher_comment'] = $updates['teacher_comment'] !== null ? 'set' : 'null';
             }
 
             if (! empty($updates)) {
@@ -470,6 +471,18 @@ class GradeSheetImport implements ToArray, WithStartRow
             $this->imported++;
             $this->gradesTotal += $gradesProcessed;
 
+            // Per-row debug log — see exactly what was persisted for each
+            // student. Look in storage/logs/laravel.log if anything seems
+            // off after an import.
+            Log::info('GradeSheetImport: row persisted', [
+                'row'             => $rowNumber,
+                'student'         => $student->full_name,
+                'matricule'       => $matricule,
+                'bulletin_id'     => $bulletin->id,
+                'grades_processed'=> $gradesProcessed,
+                'summary_fields'  => $summaryDebug,
+            ]);
+
         } catch (\Throwable $e) {
             DB::rollBack();
             $this->errors[] = "Ligne {$rowNumber}: échec pour {$student->full_name} — " . $e->getMessage();
@@ -478,6 +491,7 @@ class GradeSheetImport implements ToArray, WithStartRow
                 'row'     => $rowNumber,
                 'student' => $student->full_name,
                 'error'   => $e->getMessage(),
+                'trace'   => $e->getTraceAsString(),
             ]);
         }
     }
