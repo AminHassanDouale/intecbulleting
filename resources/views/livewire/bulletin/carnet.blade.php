@@ -558,7 +558,8 @@ $_psTeacherName = $student->classroom->teacher?->name ?? '—';
     </div>
 
     {{-- RIGHT: TABLEAU DES COMPÉTENCES — grouped by `domaine` --}}
-    <div class="ps-panel ps-right">
+    <div class="ps-panel ps-right" id="ps-panel-comp">
+      <div class="bk-inner" id="ps-inner-comp" style="transform-origin:top left;">
       <div style="display:flex;justify-content:space-between;align-items:baseline;border-bottom:1.5px solid #6B5000;padding-bottom:1mm;margin-bottom:2mm;">
         <span style="font-size:7.5pt;font-weight:700;text-transform:uppercase;">Tableau des compétences</span>
         <span style="font-size:7pt;color:#555;">{{ $_dpLabel }}</span>
@@ -618,6 +619,7 @@ $_psTeacherName = $student->classroom->teacher?->name ?? '—';
           @endforeach
         </tbody>
       </table>
+      </div>{{-- /ps-inner-comp --}}
     </div>
 
   </div>{{-- /RECTO --}}
@@ -712,11 +714,27 @@ $_psTeacherName = $student->classroom->teacher?->name ?? '—';
 .bk-page  { width: 297mm; height: 210mm; display: flex; flex-direction: row; background: #fff;
             overflow: hidden; font-size: 7pt; color: #000;
             font-family: Arial, sans-serif; box-shadow: 0 3px 14px rgba(0,0,0,.3); }
-.bk-panel { width: 148.5mm; height: 210mm; padding: 4mm 5mm; overflow: hidden; position: relative; }
+
+/* Panel: fixed A4 dimensions, clips overflow — JS scales inner content */
+.bk-panel { width: 148.5mm; height: 210mm; overflow: hidden; position: relative; }
 .bk-left  { border-right: 1.5px solid #000; }
 
+/* Inner scaler wrapper — JS sets transform-origin + scale on this */
+.bk-inner { width: 100%; padding: 4mm 5mm;
+            transform-origin: top left;
+            /* width stays 100% of panel; scale shrinks everything uniformly */ }
+
+/* Right panel uses flex column so totals/legend stick to bottom */
+.bk-panel-right-inner {
+    display: flex; flex-direction: column;
+    width: 100%; padding: 4mm 5mm;
+    transform-origin: top left;
+}
+/* Scrollable middle area inside right panel */
+.bk-middle { flex: 1 1 auto; min-height: 0; overflow: visible; }
+
 .bk-pbar { display: flex; justify-content: space-between; align-items: baseline;
-           border-bottom: 1.5px solid #000; padding-bottom: 1mm; margin-bottom: 1mm; }
+           border-bottom: 1.5px solid #000; padding-bottom: 1mm; margin-bottom: 1mm; flex-shrink: 0; }
 .bk-pbar span { font-size: 7.5pt; font-weight: 700; text-transform: uppercase; }
 
 .bk-sl { font-size: 7pt; font-weight: 700; text-transform: uppercase; margin: 1.5mm 0 0.6mm; }
@@ -734,12 +752,12 @@ $_psTeacherName = $student->classroom->teacher?->name ?? '—';
 .bk-p   { width: 6.7%; text-align: center; font-weight: 700; }
 .bk-aen { width: 5%;   text-align: center; }
 
-.bk-tt { width: 100%; border-collapse: collapse; margin-top: 1.2mm; table-layout: fixed; }
+.bk-tt { width: 100%; border-collapse: collapse; margin-top: 1.2mm; table-layout: fixed; flex-shrink: 0; }
 .bk-tt td { border: 1px solid #000; padding: 0.8mm 1.5mm; font-size: 7.5pt; background: #fff; text-align: center; }
 .bk-tt .lbl { text-align: left; font-weight: 700; background: #D9D9D9; width: 40%; }
 .bk-tt .big { font-size: 9pt; font-weight: 700; }
 
-.bk-leg { width: 100%; border-collapse: collapse; margin-top: 1.2mm; font-size: 6.5pt; }
+.bk-leg { width: 100%; border-collapse: collapse; margin-top: 1.2mm; font-size: 6.5pt; flex-shrink: 0; }
 .bk-leg th { border: 1px solid #000; padding: 0.6mm 0.8mm; font-weight: 700; text-align: center; background: #A6A6A6; }
 .bk-leg th.lh { text-align: left; }
 .bk-leg td { border: 1px solid #000; padding: 0.6mm 0.8mm; text-align: center; background: #fff; }
@@ -774,6 +792,58 @@ $_psTeacherName = $student->classroom->teacher?->name ?? '—';
 .bk-infobox .iv { font-weight: 700; }
 </style>
 
+<script>
+/**
+ * fitPanel — scales an inner wrapper to fit inside a fixed-size panel.
+ *
+ * @param {string} innerId   — id of the element to scale
+ * @param {string} panelId   — id of the clipping container (148.5mm × 210mm)
+ * @param {number} maxScale  — never scale UP (default 1.0)
+ */
+function fitPanel(innerId, panelId, maxScale) {
+    maxScale = maxScale || 1.0;
+    var inner = document.getElementById(innerId);
+    var panel = document.getElementById(panelId);
+    if (!inner || !panel) return;
+
+    // Reset any previous scale so we measure true content size.
+    inner.style.transform = 'none';
+
+    var panelH = panel.clientHeight;
+    var panelW = panel.clientWidth;
+    var innerH = inner.scrollHeight;
+    var innerW = inner.scrollWidth;
+
+    var scaleH = panelH / innerH;
+    var scaleW = panelW / innerW;
+    var scale  = Math.min(scaleH, scaleW, maxScale);
+
+    if (scale < maxScale) {
+        inner.style.transform       = 'scale(' + scale + ')';
+        inner.style.transformOrigin = 'top left';
+        // After scaling down, the element's layout width is still the original
+        // panel width, so the panel clips cleanly. No width adjustment needed.
+    }
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+    fitPanel('bk-inner-left',  'bk-panel-left');
+    fitPanel('bk-inner-right', 'bk-panel-right');
+    fitPanel('bk-inner-dos',   'bk-panel-dos');
+    fitPanel('bk-inner-cover', 'bk-panel-cover');
+    fitPanel('ps-inner-comp',  'ps-panel-comp');
+});
+
+// Also re-fit just before printing (browser may have reflowed).
+window.addEventListener('beforeprint', function () {
+    fitPanel('bk-inner-left',  'bk-panel-left');
+    fitPanel('bk-inner-right', 'bk-panel-right');
+    fitPanel('bk-inner-dos',   'bk-panel-dos');
+    fitPanel('bk-inner-cover', 'bk-panel-cover');
+    fitPanel('ps-inner-comp',  'ps-panel-comp');
+});
+</script>
+
 @php
 $splitAt       = (int) ceil($subjects->count() / 2);
 $subjectsLeft  = $subjects->take($splitAt);
@@ -804,7 +874,8 @@ $nextClassCode = \App\Models\StudentPromotion::nextClassCode($classCode);
 <div class="bk-page">
 
     {{-- ▌ DOS / APPRÉCIATIONS ▌ --}}
-    <div class="bk-panel bk-left">
+    <div class="bk-panel bk-left" id="bk-panel-dos">
+    <div class="bk-inner" id="bk-inner-dos">
 
         <div style="display:flex;justify-content:space-between;margin-bottom:1mm;">
             <strong style="font-size:8.5pt;text-transform:uppercase;">{{ strtoupper($schoolName) }}</strong>
@@ -886,10 +957,12 @@ $nextClassCode = \App\Models\StudentPromotion::nextClassCode($classCode);
             </table>
         </div>
 
+    </div>{{-- /bk-inner-dos --}}
     </div>{{-- /DOS --}}
 
     {{-- ▌ COUVERTURE ▌ --}}
-    <div class="bk-panel">
+    <div class="bk-panel" id="bk-panel-cover">
+        <div class="bk-inner" id="bk-inner-cover">
         <div class="bk-cover">
 
             <p class="bk-republic">REPUBLIQUE DE DJIBOUTI</p>
@@ -910,7 +983,8 @@ $nextClassCode = \App\Models\StudentPromotion::nextClassCode($classCode);
                 <div class="ir"><span class="il">Nom du Directeur :</span><span class="iv" style="font-weight:400;">{{ $directorName }}</span></div>
             </div>
 
-        </div>
+        </div>{{-- /bk-cover --}}
+        </div>{{-- /bk-inner-cover --}}
     </div>{{-- /COUVERTURE --}}
 
 </div>{{-- /PAGE 1 --}}
@@ -919,7 +993,8 @@ $nextClassCode = \App\Models\StudentPromotion::nextClassCode($classCode);
 <div class="bk-page">
 
     {{-- ▌ GAUCHE : MATIÈRES (première moitié) ▌ --}}
-    <div class="bk-panel bk-left">
+    <div class="bk-panel bk-left" id="bk-panel-left">
+    <div class="bk-inner" id="bk-inner-left">
 
         <div class="bk-pbar">
             <span>CARNET D'EVALUATION {{ strtoupper($classCode) }}</span>
@@ -984,17 +1059,19 @@ $nextClassCode = \App\Models\StudentPromotion::nextClassCode($classCode);
         </table>
         @endforeach
 
+    </div>{{-- /bk-inner-left --}}
     </div>{{-- /GAUCHE --}}
 
     {{-- ▌ DROITE : MATIÈRES (seconde moitié) + Totaux + Légende ▌ --}}
-    <div class="bk-panel" style="display:flex;flex-direction:column;">
+    <div class="bk-panel" id="bk-panel-right">
+    <div class="bk-panel-right-inner" id="bk-inner-right">
 
         <div class="bk-pbar" style="flex-shrink:0;">
             <span>CARNET D'EVALUATION {{ strtoupper($classCode) }}</span>
             <span style="font-size:7.5pt;text-transform:none;">Année scolaire : {{ $yearLabel }}</span>
         </div>
 
-        <div style="flex:1 1 auto;min-height:0;overflow:hidden;">
+        <div class="bk-middle">
 
         @foreach($subjectsRight as $ridx => $subject)
         @php $globalIdx = $splitAt + $ridx; @endphp
@@ -1059,7 +1136,7 @@ $nextClassCode = \App\Models\StudentPromotion::nextClassCode($classCode);
         </div>{{-- /middle --}}
 
         {{-- TOTAUX / MOYENNES --}}
-        <table class="bk-tt" style="flex-shrink:0;margin-top:auto;">
+        <table class="bk-tt">
             <colgroup>
                 <col style="width:40%"><col style="width:20%"><col style="width:20%"><col style="width:20%">
             </colgroup>
@@ -1108,6 +1185,7 @@ $nextClassCode = \App\Models\StudentPromotion::nextClassCode($classCode);
             </tbody>
         </table>
 
+    </div>{{-- /bk-inner-right --}}
     </div>{{-- /DROIT --}}
 
 </div>{{-- /PAGE 2 --}}
